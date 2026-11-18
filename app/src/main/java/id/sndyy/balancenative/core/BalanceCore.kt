@@ -298,7 +298,7 @@ class BalanceCore(context: Context) {
 
   suspend fun aiReviewEnabled(): Boolean = withContext(Dispatchers.IO) { db.aiEnabled() }
 
-  fun runAiReview() = AiReview.kick(app)
+  suspend fun runAiReview() = withContext(Dispatchers.IO) { AiReview.kick(app) }
 
   /** The user's own AI key. Stays on this phone; the UI only gets the provider and the last four characters. */
   suspend fun setAiKey(key: String): AiKeyInfo = withContext(Dispatchers.IO) {

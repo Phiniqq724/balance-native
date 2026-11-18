@@ -1,0 +1,184 @@
+package id.sndyy.balancenative.ui.main
+
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Person
+import androidx.compose.material.icons.rounded.ReceiptLong
+import androidx.compose.material.icons.rounded.ShowChart
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import id.sndyy.balancenative.Landing
+import id.sndyy.balancenative.balance
+import id.sndyy.balancenative.ui.activity.ActivityScreen
+import id.sndyy.balancenative.ui.activity.ActivityViewModel
+import id.sndyy.balancenative.ui.activity.NewTxSheet
+import id.sndyy.balancenative.ui.kit.Label
+import id.sndyy.balancenative.ui.kit.ledgerTicks
+import id.sndyy.balancenative.ui.kit.rememberPressScale
+import id.sndyy.balancenative.ui.overview.OverviewScreen
+import id.sndyy.balancenative.ui.profile.ProfileScreen
+import id.sndyy.balancenative.ui.theme.Ember
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+
+private data class Tab(val label: String, val icon: ImageVector)
+
+private val TABS = listOf(
+  Tab("Overview", Icons.Rounded.ShowChart),
+  Tab("Activity", Icons.Rounded.ReceiptLong),
+  Tab("Profile", Icons.Rounded.Person),
+)
+
+/** Swipeable pages with a floating pill of tabs; the add button rides beside it on Activity only. */
+@Composable
+fun MainScreen(landing: MutableStateFlow<Landing?>) {
+  val pager = rememberPagerState { TABS.size }
+  val scope = rememberCoroutineScope()
+  val activity: ActivityViewModel = viewModel()
+  val pendingLanding by landing.collectAsState()
+  var adding by remember { mutableStateOf(false) }
+  val core = LocalContext.current.balance.core
+  // Same count as "To check" in Activity, live with every ledger write.
+  val toCheck by remember { ledgerTicks().map { runCatching { core.unparsedCount() }.getOrDefault(0) } }.collectAsState(0)
+
+  LaunchedEffect(pendingLanding) { if (pendingLanding != null) pager.animateScrollToPage(1) }
+
+  Box(Modifier.fillMaxSize().background(Ember.bg)) {
+    HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1, key = { it }) { page ->
+      when (page) {
+        0 -> OverviewScreen(onCategory = { f ->
+          activity.setFilter(f)
+          scope.launch { pager.animateScrollToPage(1) }
+        })
+        1 -> ActivityScreen(
+          landing = pendingLanding?.let { it.filter to it.fix },
+          onLandingUsed = { landing.value = null },
+          vm = activity,
+        )
+        else -> ProfileScreen()
+      }
+    }
+
+    FloatingBar(
+      selected = pager.targetPage,
+      toCheck = toCheck,
+      showAdd = pager.targetPage == 1,
+      onSelect = { scope.launch { pager.animateScrollToPage(it, animationSpec = spring(stiffness = Spring.StiffnessMediumLow)) } },
+      onAdd = { adding = true },
+      modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 8.dp),
+    )
+  }
+
+  if (adding) NewTxSheet(onClose = { adding = false })
+}
+
+@Composable
+private fun FloatingBar(selected: Int, toCheck: Int, showAdd: Boolean, onSelect: (Int) -> Unit, onAdd: () -> Unit, modifier: Modifier) {
+  val view = LocalView.current
+  Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Surface(color = Ember.raised, shape = RoundedCornerShape(28.dp), shadowElevation = 8.dp) {
+      Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        TABS.forEachIndexed { i, tab ->
+          val focused = i == selected
+          val bg by animateColorAsState(if (focused) Ember.selected else Ember.raised, label = "tabBg")
+          val tint by animateColorAsState(if (focused) Ember.text else Ember.muted, label = "tabTint")
+          val source = remember { MutableInteractionSource() }
+          val scale = rememberPressScale(source, 0.92f)
+          Row(
+            Modifier
+              .graphicsLayer { scaleX = scale; scaleY = scale }
+              .clip(RoundedCornerShape(22.dp))
+              .background(bg)
+              .clickable(interactionSource = source, indication = null) {
+                if (!focused) {
+                  view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                  onSelect(i)
+                }
+              }
+              .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            if (i == 1 && toCheck > 0) {
+              BadgedBox(badge = { Badge(containerColor = Ember.accent, contentColor = Ember.bg) { Label(if (toCheck > 99) "99+" else "$toCheck", size = 10.sp, weight = FontWeight.Bold, color = Ember.bg) } }) {
+                Icon(tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
+              }
+            } else {
+              Icon(tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
+            }
+            AnimatedVisibility(focused, enter = fadeIn() + expandHorizontally(spring(dampingRatio = Spring.DampingRatioLowBouncy)), exit = fadeOut() + shrinkHorizontally()) {
+              Label(tab.label, size = 14.sp, weight = FontWeight.Bold, color = tint, maxLines = 1)
+            }
+          }
+        }
+      }
+    }
+    AnimatedVisibility(showAdd, enter = scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy)) + fadeIn(), exit = scaleOut() + fadeOut()) {
+      val source = remember { MutableInteractionSource() }
+      val scale = rememberPressScale(source, 0.9f)
+      Box(
+        Modifier
+          .graphicsLayer { scaleX = scale; scaleY = scale }
+          .shadow(8.dp, CircleShape)
+          .size(56.dp)
+          .clip(RoundedCornerShape(18.dp))
+          .background(Ember.accent)
+          .clickable(interactionSource = source, indication = null) {
+            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+            onAdd()
+          },
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(Icons.Rounded.Add, "New transaction", tint = Ember.bg, modifier = Modifier.size(26.dp))
+      }
+    }
+  }
+}

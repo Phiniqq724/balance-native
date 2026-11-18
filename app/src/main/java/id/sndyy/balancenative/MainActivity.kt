@@ -1,47 +1,95 @@
 package id.sndyy.balancenative
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
-import id.sndyy.balancenative.ui.theme.BalanceNativeTheme
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.lifecycleScope
+import id.sndyy.balancenative.core.AccountState
+import id.sndyy.balancenative.ui.kit.UiEvents
+import id.sndyy.balancenative.ui.main.MainScreen
+import id.sndyy.balancenative.ui.signin.SignInScreen
+import id.sndyy.balancenative.ui.theme.BalanceTheme
+import id.sndyy.balancenative.ui.theme.Ember
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
+
+/** Where a deep link asked to land: "review" opens Activity filtered to To check; [fix] opens that item's fix sheet. */
+data class Landing(val filter: String?, val fix: Long?, val nonce: Long = System.nanoTime())
 
 class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContent {
-            BalanceNativeTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
-            }
-        }
-    }
-}
+  private val landing = MutableStateFlow<Landing?>(null)
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
+  override fun onCreate(savedInstanceState: Bundle?) {
+    val splash = installSplashScreen()
+    super.onCreate(savedInstanceState)
+    val account = balance.account
+    // Held until we know which ledger is open, so the sign-in screen never flashes for a signed-in user.
+    splash.setKeepOnScreenCondition { account.state.value == AccountState.Loading }
+    lifecycleScope.launch {
+      account.load()
+      if (account.state.value != AccountState.None) runCatching { balance.core.applyBundledRules() }
+    }
+
+    enableEdgeToEdge(
+      statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+      navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
     )
-}
+    handle(intent)
 
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    BalanceNativeTheme {
-        Greeting("Android")
+    setContent {
+      BalanceTheme {
+        val state by account.state.collectAsState()
+        Box(Modifier.fillMaxSize().background(Ember.bg)) {
+          AnimatedContent(
+            targetState = state is AccountState.None,
+            transitionSpec = { (fadeIn(tween(320)) + scaleIn(tween(320), initialScale = 0.98f)) togetherWith fadeOut(tween(200)) },
+            label = "root",
+          ) { signedOut ->
+            when {
+              state == AccountState.Loading -> Unit
+              signedOut -> SignInScreen()
+              else -> MainScreen(landing)
+            }
+          }
+        }
+      }
     }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    handle(intent)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    UiEvents.resumed()
+    balance.core.ensureListenerBound()
+    lifecycleScope.launch {
+      // Re-open = re-read: rules may have changed with an app update, and the day may have rolled over.
+      if (balance.account.state.value !is AccountState.None) runCatching { balance.core.applyBundledRules() }
+    }
+  }
+
+  private fun handle(intent: Intent?) {
+    val uri = intent?.data ?: return
+    if (uri.scheme != "balancenative") return
+    landing.value = Landing(uri.getQueryParameter("f"), uri.getQueryParameter("fix")?.toLongOrNull())
+  }
 }

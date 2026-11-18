@@ -459,6 +459,8 @@ internal object Ledger {
     // Cloud accounts push soon after any change, app open or not.
     val owner = Account.userId(context)
     if (owner != null && owner != Account.LOCAL) runCatching { SyncWorker.request(context) }
+    // New unclear notifications get read in the background, not only while the app is open.
+    runCatching { AiReview.kick(context) }
   }
 }
 

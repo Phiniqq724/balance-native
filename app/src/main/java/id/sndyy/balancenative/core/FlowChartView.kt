@@ -88,11 +88,15 @@ fun FlowChart(props: FlowChartProps, modifier: Modifier = Modifier) {
           // Keep the page swiper from stealing a horizontal scrub that starts on the chart.
           view.parent?.requestDisallowInterceptTouchEvent(true)
           touched = indexAt(down.position.x)
+          view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
           while (true) {
             val event = awaitPointerEvent()
             val change = event.changes.firstOrNull() ?: break
             if (!change.pressed) break
-            touched = indexAt(change.position.x)
+            val next = indexAt(change.position.x)
+            // A light tick per slot, so scrubbing feels like a dial.
+            if (next != touched) view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+            touched = next
           }
           touched = null
           view.parent?.requestDisallowInterceptTouchEvent(false)

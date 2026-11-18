@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Dark only. The splash holds until we know which ledger is open, so sign-in never flashes. -->
+    <style name="Theme.BalanceNative.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ember_bg</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.BalanceNative</item>
+    </style>
 
-    <style name="Theme.BalanceNative" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.BalanceNative" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ember_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>
