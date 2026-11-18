@@ -2,6 +2,13 @@ package id.sndyy.balancenative.ui.main
 
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
+import androidx.compose.material.icons.outlined.GridView
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -29,7 +36,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
-import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -71,13 +77,32 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
-private data class Tab(val label: String, val icon: ImageVector)
+/** Outlined at rest, filled when the tab is the one you're on. */
+private data class Tab(val label: String, val icon: ImageVector, val active: ImageVector)
 
 private val TABS = listOf(
-  Tab("Overview", Icons.AutoMirrored.Rounded.ShowChart),
-  Tab("Activity", Icons.AutoMirrored.Rounded.ReceiptLong),
-  Tab("Profile", Icons.Rounded.Person),
+  Tab("Overview", Icons.Outlined.GridView, Icons.Rounded.GridView),
+  Tab("Activity", Icons.AutoMirrored.Outlined.ReceiptLong, Icons.AutoMirrored.Rounded.ReceiptLong),
+  Tab("Profile", Icons.Outlined.Person, Icons.Rounded.Person),
 )
+
+/** The tab icon fills when it becomes active, with a small spring pop; leaving it just fades back to outline. */
+@Composable
+private fun TabIcon(tab: Tab, focused: Boolean, tint: androidx.compose.ui.graphics.Color) {
+  AnimatedContent(
+    targetState = focused,
+    transitionSpec = {
+      if (targetState) {
+        (fadeIn(tween(120)) + scaleIn(spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), initialScale = 0.7f)) togetherWith fadeOut(tween(90))
+      } else {
+        fadeIn(tween(120)) togetherWith fadeOut(tween(90))
+      }
+    },
+    label = "tabIcon",
+  ) { on ->
+    Icon(if (on) tab.active else tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
+  }
+}
 
 /** Swipeable pages with a floating pill of tabs; the add button rides beside it on Activity only. */
 @Composable
@@ -125,7 +150,7 @@ fun MainScreen(landing: MutableStateFlow<Landing?>) {
 @Composable
 private fun FloatingBar(selected: Int, toCheck: Int, showAdd: Boolean, onSelect: (Int) -> Unit, onAdd: () -> Unit, modifier: Modifier) {
   val view = LocalView.current
-  Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+  Row(modifier, verticalAlignment = Alignment.CenterVertically) {
     Surface(color = Ember.raised, shape = RoundedCornerShape(28.dp), shadowElevation = 8.dp) {
       Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
         // Counted-style squeeze on a bar that hugs its content: the pressed tab gains padding and its
@@ -158,10 +183,10 @@ private fun FloatingBar(selected: Int, toCheck: Int, showAdd: Boolean, onSelect:
           ) {
             if (i == 1 && toCheck > 0) {
               BadgedBox(badge = { Badge(containerColor = Ember.accent, contentColor = Ember.bg) { Label(if (toCheck > 99) "99+" else "$toCheck", size = 10.sp, weight = FontWeight.Bold, color = Ember.bg) } }) {
-                Icon(tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
+                TabIcon(tab, focused, tint)
               }
             } else {
-              Icon(tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
+              TabIcon(tab, focused, tint)
             }
             AnimatedVisibility(focused, enter = fadeIn() + expandHorizontally(spring(dampingRatio = Spring.DampingRatioLowBouncy)), exit = fadeOut() + shrinkHorizontally()) {
               Label(tab.label, size = 14.sp, weight = FontWeight.Bold, color = tint, maxLines = 1)
@@ -170,11 +195,19 @@ private fun FloatingBar(selected: Int, toCheck: Int, showAdd: Boolean, onSelect:
         }
       }
     }
-    AnimatedVisibility(showAdd, enter = scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy)) + fadeIn(), exit = scaleOut() + fadeOut()) {
+    // The add button's slot (with its 8dp gap) grows and shrinks with it, so the centred pill glides
+    // aside and back instead of jumping when the button finishes leaving.
+    val slot = spring<androidx.compose.ui.unit.IntSize>(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)
+    AnimatedVisibility(
+      showAdd,
+      enter = expandHorizontally(slot, expandFrom = Alignment.Start) + scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy), initialScale = 0.6f) + fadeIn(),
+      exit = shrinkHorizontally(slot, shrinkTowards = Alignment.Start) + scaleOut(targetScale = 0.6f) + fadeOut(tween(120)),
+    ) {
       val source = remember { MutableInteractionSource() }
       val scale = rememberPressScale(source, 0.9f)
       Box(
         Modifier
+          .padding(start = 8.dp)
           .graphicsLayer { scaleX = scale; scaleY = scale }
           .shadow(8.dp, CircleShape)
           .size(56.dp)
