@@ -11,6 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -54,6 +56,11 @@ import id.sndyy.balancenative.core.BalanceCore
 import id.sndyy.balancenative.core.BalanceException
 import id.sndyy.balancenative.core.SyncWorker
 import id.sndyy.balancenative.data.Apps
+import id.sndyy.balancenative.data.ActivityQuery
+import id.sndyy.balancenative.ui.overview.CELL_GAP
+import id.sndyy.balancenative.ui.overview.CellMeter
+import id.sndyy.balancenative.ui.overview.RANK_1
+import id.sndyy.balancenative.ui.overview.cellsFor
 import id.sndyy.balancenative.data.Category
 import id.sndyy.balancenative.data.Format
 import id.sndyy.balancenative.data.InstalledApp
@@ -81,6 +88,7 @@ data class ProfileData(
   val aiReview: Boolean,
   val alerts: Boolean,
   val aiKey: BalanceCore.AiKeyInfo?,
+  val entries: Int,
 )
 
 class ProfileViewModel(app: Application) : AndroidViewModel(app) {
@@ -95,6 +103,7 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
       aiReview = core.aiReviewEnabled(),
       alerts = core.setting("review_alerts") != "0",
       aiKey = core.aiKeyInfo(),
+      entries = runCatching { core.activityPage(ActivityQuery(), 1).total }.getOrDefault(0),
     )
   }
 
@@ -124,6 +133,7 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
 
   Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding()) {
     Header(accountState)
+    Summary(data)
 
     SectionHead("Categories")
     FlowRow(Modifier.padding(horizontal = Space.page), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -132,21 +142,23 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
     }
 
     SectionHead("Reading")
-    AnimatedVisibility(!data.hasAccess) {
-      SettingsRow("Notification access off", "Needed to log payments", tone = Tone.DANGER) { core.openNotificationAccessSettings() }
+    Group {
+      AnimatedVisibility(!data.hasAccess) {
+        SettingsRow("Notification access off", "Needed to log payments", tone = Tone.DANGER) { core.openNotificationAccessSettings() }
+      }
+      SettingsRow("Read from", data.watched.joinToString(", ") { label(it) }.ifEmpty { "Nothing yet" }, status = "${data.watched.size} on") { pickingApps = true }
+      ToggleRow("AI review", "Reads what the rules can't", data.aiReview, enabled = accountState is AccountState.Signed || data.aiKey != null) { on ->
+        scope.launch { core.setAiReview(on) }
+      }
+      ToggleRow("Alerts", "Ask me about unclear ones", data.alerts) { on -> scope.launch { core.setSetting("review_alerts", if (on) "1" else "0") } }
+      SettingsRow("AI key", data.aiKey?.let { "${it.provider} ····${it.last4}" } ?: "Use your own Gemini, OpenAI or Claude key") { keySheet = true }
     }
-    SettingsRow("Read from", data.watched.joinToString(", ") { label(it) }.ifEmpty { "Nothing yet" }, status = "${data.watched.size} on") { pickingApps = true }
-    ToggleRow("AI review", "Reads what the rules can't", data.aiReview, enabled = accountState is AccountState.Signed || data.aiKey != null) { on ->
-      scope.launch { core.setAiReview(on) }
-    }
-    ToggleRow("Alerts", "Ask me about unclear ones", data.alerts) { on -> scope.launch { core.setSetting("review_alerts", if (on) "1" else "0") } }
-    SettingsRow("AI key", data.aiKey?.let { "${it.provider} ····${it.last4}" } ?: "Use your own Gemini, OpenAI or Claude key") { keySheet = true }
 
     SectionHead("Data")
-    DataRows()
+    Group { DataRows() }
 
     SectionHead("Account")
-    AccountRows(accountState)
+    Group { AccountRows(accountState) }
 
     Spacer(Modifier.height(140.dp))
   }
@@ -175,10 +187,45 @@ private fun Header(state: AccountState) {
   }
 }
 
+/** A soft panel holding related rows: grouping by surface instead of dividers. */
+@Composable
+private fun Group(content: @Composable ColumnScope.() -> Unit) {
+  Column(
+    Modifier.fillMaxWidth().padding(horizontal = Space.page).clip(RoundedCornerShape(16.dp)).background(Ember.surface).padding(vertical = 4.dp),
+    content = content,
+  )
+}
+
+/**
+ * The ledger at a glance under the name: three large cells on the grid's pitch, each a count with a
+ * row of small cells that hints at its size.
+ */
+@Composable
+private fun Summary(data: ProfileData) {
+  Row(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 20.dp), horizontalArrangement = Arrangement.spacedBy(CELL_GAP)) {
+    SummaryCell(Format.digits(data.entries.toLong()), if (data.entries == 1) "entry" else "entries", cellsFor(minOf(1.0, data.entries / 1000.0), 10))
+    SummaryCell(data.watched.size.toString(), if (data.watched.size == 1) "app read" else "apps read", minOf(10, data.watched.size))
+    SummaryCell(data.categories.size.toString(), if (data.categories.size == 1) "category" else "categories", minOf(10, data.categories.size))
+  }
+}
+
+@Composable
+private fun RowScope.SummaryCell(value: String, label: String, filled: Int) {
+  Column(
+    Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(Ember.surface).padding(12.dp),
+    verticalArrangement = Arrangement.spacedBy(2.dp),
+  ) {
+    Label(value, size = 20.sp, weight = FontWeight.Bold, maxLines = 1)
+    Label(label, size = 12.sp, tone = Tone.MUTED, maxLines = 1)
+    Spacer(Modifier.height(8.dp))
+    CellMeter(filled, 10, RANK_1)
+  }
+}
+
 @Composable
 fun SettingsRow(title: String, subtitle: String? = null, status: String? = null, tone: Tone = Tone.TEXT, statusTone: Tone = Tone.MUTED, onPress: (() -> Unit)? = null) {
   Row(
-    Modifier.fillMaxWidth().then(if (onPress != null) Modifier.clickable(onClick = onPress) else Modifier).padding(horizontal = Space.page, vertical = 14.dp),
+    Modifier.fillMaxWidth().then(if (onPress != null) Modifier.clickable(onClick = onPress) else Modifier).padding(horizontal = 16.dp, vertical = 14.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(12.dp),
   ) {
@@ -193,7 +240,7 @@ fun SettingsRow(title: String, subtitle: String? = null, status: String? = null,
 @Composable
 private fun ToggleRow(title: String, subtitle: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
   Row(
-    Modifier.fillMaxWidth().clickable(enabled = enabled) { onChange(!checked) }.padding(horizontal = Space.page, vertical = 12.dp),
+    Modifier.fillMaxWidth().clickable(enabled = enabled) { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 12.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(12.dp),
   ) {
