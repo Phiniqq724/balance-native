@@ -5,10 +5,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
-import androidx.compose.material.icons.outlined.GridView
-import androidx.compose.material.icons.rounded.GridView
-import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -34,8 +30,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -54,6 +48,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
+import androidx.annotation.DrawableRes
+import id.sndyy.balancenative.R
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -78,12 +75,13 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /** Outlined at rest, filled when the tab is the one you're on. */
-private data class Tab(val label: String, val icon: ImageVector, val active: ImageVector)
+// Material Symbols Rounded, which (unlike the old icon set) has a true filled form of each glyph.
+private data class Tab(val label: String, @DrawableRes val icon: Int, @DrawableRes val active: Int)
 
 private val TABS = listOf(
-  Tab("Overview", Icons.Outlined.GridView, Icons.Rounded.GridView),
-  Tab("Activity", Icons.AutoMirrored.Outlined.ReceiptLong, Icons.AutoMirrored.Rounded.ReceiptLong),
-  Tab("Profile", Icons.Outlined.Person, Icons.Rounded.Person),
+  Tab("Overview", R.drawable.sym_insights, R.drawable.sym_insights_fill),
+  Tab("Activity", R.drawable.sym_receipt_long, R.drawable.sym_receipt_long_fill),
+  Tab("Profile", R.drawable.sym_person, R.drawable.sym_person_fill),
 )
 
 /** The tab icon fills when it becomes active, with a small spring pop; leaving it just fades back to outline. */
@@ -100,7 +98,7 @@ private fun TabIcon(tab: Tab, focused: Boolean, tint: androidx.compose.ui.graphi
     },
     label = "tabIcon",
   ) { on ->
-    Icon(if (on) tab.active else tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
+    Icon(ImageVector.vectorResource(if (on) tab.active else tab.icon), tab.label, tint = tint, modifier = Modifier.size(24.dp))
   }
 }
 
@@ -200,8 +198,8 @@ private fun FloatingBar(selected: Int, toCheck: Int, showAdd: Boolean, onSelect:
     val slot = spring<androidx.compose.ui.unit.IntSize>(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)
     AnimatedVisibility(
       showAdd,
-      enter = expandHorizontally(slot, expandFrom = Alignment.Start) + scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy), initialScale = 0.6f) + fadeIn(),
-      exit = shrinkHorizontally(slot, shrinkTowards = Alignment.Start) + scaleOut(targetScale = 0.6f) + fadeOut(tween(120)),
+      enter = expandHorizontally(slot, expandFrom = Alignment.Start, clip = false) + scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy), initialScale = 0.6f) + fadeIn(),
+      exit = shrinkHorizontally(slot, shrinkTowards = Alignment.Start, clip = false) + scaleOut(targetScale = 0.6f) + fadeOut(tween(120)),
     ) {
       val source = remember { MutableInteractionSource() }
       val scale = rememberPressScale(source, 0.9f)
