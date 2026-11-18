@@ -76,12 +76,8 @@ dependencies {
     implementation(libs.googleid)
     implementation(libs.androidx.glance.appwidget)
     implementation(libs.androidx.glance.material3)
-    implementation(platform(libs.supabase.bom))
-    implementation(libs.supabase.auth)
-    implementation(libs.supabase.postgrest)
-    implementation(libs.supabase.functions)
-    implementation(libs.ktor.client.okhttp)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
     testImplementation(libs.junit)
     // Android's org.json is a stub on the JVM; the parser tests need the real one.
     testImplementation(libs.org.json)

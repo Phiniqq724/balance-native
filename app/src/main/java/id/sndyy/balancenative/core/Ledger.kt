@@ -456,6 +456,9 @@ internal object Ledger {
     runCatching { ReviewNotifier.syncBadge(context) }
     WidgetBridge.refresh(context)
     BalanceEvents.emitLedgerChanged()
+    // Cloud accounts push soon after any change, app open or not.
+    val owner = Account.userId(context)
+    if (owner != null && owner != Account.LOCAL) runCatching { SyncWorker.request(context) }
   }
 }
 

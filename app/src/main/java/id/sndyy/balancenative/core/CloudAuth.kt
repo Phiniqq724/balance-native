@@ -2,7 +2,8 @@ package id.sndyy.balancenative.core
 
 import android.content.Context
 import java.io.IOException
-import java.net.HttpURLConnection
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URL
 import org.json.JSONException
 import org.json.JSONObject
@@ -10,23 +11,34 @@ import org.json.JSONObject
 internal class HttpResult(val code: Int, val body: String, val retryAfter: Int?)
 
 internal object CloudHttp {
+  private val client = okhttp3.OkHttpClient.Builder()
+    .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+    .build()
+
   /** POSTs [json]. Network failures throw [IOException]; any HTTP status comes back as a result. */
-  fun post(url: String, headers: Map<String, String>, json: String, timeoutMs: Int): HttpResult {
-    val conn = URL(url).openConnection() as HttpURLConnection
-    try {
-      conn.requestMethod = "POST"
-      conn.connectTimeout = 15_000
-      conn.readTimeout = timeoutMs
-      conn.doOutput = true
-      conn.setRequestProperty("Content-Type", "application/json")
-      headers.forEach { (k, v) -> conn.setRequestProperty(k, v) }
-      conn.outputStream.use { it.write(json.toByteArray()) }
-      val code = conn.responseCode
-      val stream = if (code in 200..399) conn.inputStream else conn.errorStream
-      val body = stream?.bufferedReader()?.use { it.readText() }.orEmpty()
-      return HttpResult(code, body, conn.getHeaderField("Retry-After")?.trim()?.toIntOrNull())
-    } finally {
-      conn.disconnect()
+  fun post(url: String, headers: Map<String, String>, json: String, timeoutMs: Int): HttpResult =
+    request("POST", url, headers, json, timeoutMs)
+
+  /** Any method; [body] null sends none (or [bytes] with [contentType], for uploads). */
+  fun request(
+    method: String,
+    url: String,
+    headers: Map<String, String>,
+    body: String? = null,
+    timeoutMs: Int = 30_000,
+    contentType: String = "application/json",
+    bytes: ByteArray? = null,
+  ): HttpResult {
+    val type = contentType.toMediaType()
+    val payload = (bytes ?: body?.toByteArray())?.toRequestBody(type)
+    val request = okhttp3.Request.Builder()
+      .url(url)
+      .apply { headers.forEach { (k, v) -> header(k, v) } }
+      .method(method, payload ?: if (method == "POST" || method == "PATCH") ByteArray(0).toRequestBody(type) else null)
+      .build()
+    val call = client.newBuilder().readTimeout(timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS).build().newCall(request)
+    call.execute().use { res ->
+      return HttpResult(res.code, res.body.string(), res.header("Retry-After")?.trim()?.toIntOrNull())
     }
   }
 }
