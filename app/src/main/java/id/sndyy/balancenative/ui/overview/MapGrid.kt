@@ -146,17 +146,6 @@ fun MapGrid(
               }
             }
           }
-          // A focused week gets one soft rim around its column.
-          if (focus != null && m == focus) {
-            val o = g / 2 + 1.5.dp.toPx()
-            drawRoundRect(
-              Ember.text.copy(alpha = 0.92f),
-              Offset(xOf(k) - o, top - o),
-              Size(c + 2 * o, 7 * pitch - g + 2 * o),
-              CornerRadius(5.dp.toPx()),
-              style = Stroke(1.5.dp.toPx()),
-            )
-          }
         }
       }
 
@@ -165,6 +154,22 @@ fun MapGrid(
       // Both edges always fade, so the map reads as a window onto a longer strip of time.
       drawRect(Brush.horizontalGradient(listOf(Ember.bg, Color.Transparent), 0f, fade), Offset(0f, top - 4f), Size(fade, size.height))
       drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Ember.bg), size.width - fade, size.width), Offset(size.width - fade, top - 4f), Size(fade, size.height))
+
+      // The focused week's rim goes on last, above every cell and the edge fades, so neighbouring
+      // columns never paint over it.
+      if (focus != null) {
+        val k = (MAP_WEEKS - 1) - ((now.toEpochDay() - focus.toEpochDay()) / 7).toInt() + base
+        if (k in -1..MAP_WEEKS) {
+          val o = g / 2 + 1.5.dp.toPx()
+          drawRoundRect(
+            Ember.text.copy(alpha = 0.92f),
+            Offset(xOf(k) - o, top - o),
+            Size(c + 2 * o, 7 * pitch - g + 2 * o),
+            CornerRadius(5.dp.toPx()),
+            style = Stroke(1.5.dp.toPx()),
+          )
+        }
+      }
     }
   }
 }
