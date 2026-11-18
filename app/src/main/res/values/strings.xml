@@ -1,3 +1,8 @@
 <resources>
     <string name="balance_listener_label">Balance transaction reader</string>
+    <string name="widget_spend_grid_description">Daily spending, brighter means more</string>
+    <string name="widget_month_pulse_description">Spent and received. Tap the label for week, month or year</string>
+    <string name="widget_daily_spend_description">Spending per day, last 30 days</string>
+    <string name="widget_day_by_day_description">Spending, last 7 days</string>
+    <string name="widget_to_check_description">Answer unclear payments without opening the app</string>
 </resources>

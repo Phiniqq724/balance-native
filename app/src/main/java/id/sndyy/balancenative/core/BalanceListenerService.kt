@@ -18,6 +18,8 @@ class BalanceListenerService : NotificationListenerService() {
   // The spend grid and "today" totals roll over at midnight even when no notification arrives.
   private val dayChangeReceiver = object : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+      // Open screens and running widget sessions re-read too: "today" just moved.
+      BalanceEvents.emitLedgerChanged()
       WidgetBridge.refresh(context)
     }
   }

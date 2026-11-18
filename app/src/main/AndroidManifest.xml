@@ -46,6 +46,56 @@
         <receiver
             android:name=".core.ReviewActionReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".widget.SpendGridReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_spend_grid" />
+        </receiver>
+        <receiver
+            android:name=".widget.MonthPulseReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_month_pulse" />
+        </receiver>
+        <receiver
+            android:name=".widget.DailySpendReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_daily_spend" />
+        </receiver>
+        <receiver
+            android:name=".widget.DayByDayReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_day_by_day" />
+        </receiver>
+        <receiver
+            android:name=".widget.ToCheckReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_to_check" />
+        </receiver>
         <service
             android:name=".core.BalanceListenerService"
             android:label="@string/balance_listener_label"

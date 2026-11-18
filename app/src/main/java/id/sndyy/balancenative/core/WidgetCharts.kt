@@ -11,10 +11,6 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
-import android.net.Uri
-import org.json.JSONObject
-import java.io.File
-import java.util.Calendar
 import java.util.Locale
 import kotlin.math.max
 import kotlin.math.min
@@ -23,86 +19,13 @@ import kotlin.math.sqrt
 /**
  * Bitmaps for the DailySpend (4x2) and DayByDay (2x2) widgets. expo-widgets can't draw lines or
  * custom bars, so each chart is one PNG sized to its widget, like the spending grid. Props are
- * pushed by WidgetBridge.refresh, so they update with the app closed. Colors follow src/theme.ts.
+ * drawn by the Glance widgets at their exact size. Colors follow the Ember theme.
  */
 internal object WidgetCharts {
   private const val TEXT = 0xFFF3EBE2.toInt()
   private const val MUTED = 0xFFAC9F92.toInt()
   private const val LINE = 0xFF3A322C.toInt()
   private const val ACCENT = 0xFFFF7444.toInt()
-
-  /** Matches src/widgets/daily-spend.tsx and day-by-day.tsx: 12dp padding, 24dp header. */
-  private const val PAD = 12f
-  private const val HEADER = 24f
-
-  fun dailySpendProps(context: Context, db: BalanceDb): JSONObject {
-    val today = startOfDay(Calendar.getInstance())
-    val days = 30
-    val start = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -(days - 1)) }
-    val totals = dailyTotals(db, start.timeInMillis)
-
-    val values = DoubleArray(days)
-    val cursor = start.clone() as Calendar
-    for (i in values.indices) {
-      values[i] = (totals[dayKey(cursor)] ?: 0L).toDouble()
-      cursor.add(Calendar.DAY_OF_YEAR, 1)
-    }
-
-    val (width, height) = widgetSize(context, "DailySpend", 250, 110)
-    val file = drawLine(context, values, days, width - PAD * 2, height - PAD * 2 - HEADER)
-    return JSONObject()
-      .put("chart", Uri.fromFile(file).toString())
-      .put("total", WidgetBridge.compact(values.sum().toLong()))
-  }
-
-  fun dayByDayProps(context: Context, db: BalanceDb): JSONObject {
-    val today = startOfDay(Calendar.getInstance())
-    val start = (today.clone() as Calendar).apply { add(Calendar.DAY_OF_YEAR, -6) }
-    val totals = dailyTotals(db, start.timeInMillis)
-
-    val values = DoubleArray(7)
-    val initials = Array(7) { "" }
-    val cursor = start.clone() as Calendar
-    for (i in 0 until 7) {
-      values[i] = (totals[dayKey(cursor)] ?: 0L).toDouble()
-      initials[i] = cursor.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, Locale.ENGLISH).take(1)
-      cursor.add(Calendar.DAY_OF_YEAR, 1)
-    }
-
-    val (width, height) = widgetSize(context, "DayByDay", 110, 110)
-    val file = drawBars(context, values, initials, width - PAD * 2, height - PAD * 2 - HEADER)
-    return JSONObject()
-      .put("chart", Uri.fromFile(file).toString())
-      .put("total", WidgetBridge.compact(values.sum().toLong()))
-  }
-
-  /** The first placed widget's size in dp (portrait: min width x max height), else the size it's added at. */
-  private fun widgetSize(context: Context, name: String, defaultWidth: Int, defaultHeight: Int): Pair<Float, Float> {
-    val manager = AppWidgetManager.getInstance(context)
-    val component = ComponentName(context.packageName, "${context.packageName}.${name}Provider")
-    val id = runCatching { manager.getAppWidgetIds(component) }.getOrNull()?.firstOrNull()
-    val options = id?.let { manager.getAppWidgetOptions(it) }
-    val width = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)?.takeIf { it > 0 } ?: defaultWidth
-    val height = options?.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT)?.takeIf { it > 0 } ?: defaultHeight
-    return width.toFloat() to height.toFloat()
-  }
-
-  /** Spend per local day, keyed by dayKey. */
-  private fun dailyTotals(db: BalanceDb, from: Long): Map<String, Long> {
-    val totals = HashMap<String, Long>()
-    val day = Calendar.getInstance()
-    db.readableDatabase.rawQuery(
-      "SELECT occurred_at, amount FROM transactions WHERE is_transfer = 0 AND direction = 'out' AND occurred_at >= ?",
-      arrayOf(from.toString())
-    ).use { c ->
-      while (c.moveToNext()) {
-        day.timeInMillis = c.getLong(0)
-        val key = dayKey(day)
-        totals[key] = (totals[key] ?: 0L) + c.getLong(1)
-      }
-    }
-    return totals
-  }
 
   private fun newCanvas(context: Context, widthDp: Float, heightDp: Float): Triple<Bitmap, Canvas, Float> {
     val density = context.resources.displayMetrics.density
@@ -114,21 +37,12 @@ internal object WidgetCharts {
     return Triple(bitmap, Canvas(bitmap), density)
   }
 
-  private fun save(context: Context, bitmap: Bitmap, name: String): File {
-    val dir = File(context.filesDir, "widgets").apply { mkdirs() }
-    val tmp = File(dir, "$name.png.tmp")
-    tmp.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-    bitmap.recycle()
-    val file = File(dir, "$name.png")
-    tmp.renameTo(file)
-    return file
-  }
-
   private fun font(context: Context): Typeface =
     runCatching { Typeface.createFromAsset(context.assets, "fonts/Satoshi-Medium.otf") }.getOrDefault(Typeface.DEFAULT)
 
   /** Same look as the Overview line: light line over a soft fill, two rules, accent dot on today. */
-  private fun drawLine(context: Context, values: DoubleArray, days: Int, widthDp: Float, heightDp: Float): File {
+  /** The 30-day line, drawn at exactly [widthDp] x [heightDp]. */
+  fun drawLine(context: Context, values: DoubleArray, days: Int, widthDp: Float, heightDp: Float): Bitmap {
     val (bitmap, canvas, density) = newCanvas(context, widthDp, heightDp)
     val w = bitmap.width.toFloat()
     val h = bitmap.height.toFloat()
@@ -176,11 +90,12 @@ internal object WidgetCharts {
     paint.style = Paint.Style.FILL
     paint.color = ACCENT
     canvas.drawCircle(points.last().first, points.last().second, 3.5f * density, paint)
-    return save(context, bitmap, "daily-spend")
+    return bitmap
   }
 
   /** Seven bars, today's in accent and the rest muted, weekday initials underneath. */
-  private fun drawBars(context: Context, values: DoubleArray, initials: Array<String>, widthDp: Float, heightDp: Float): File {
+  /** Seven day bars with initials, drawn at exactly [widthDp] x [heightDp]. */
+  fun drawBars(context: Context, values: DoubleArray, initials: Array<String>, widthDp: Float, heightDp: Float): Bitmap {
     val (bitmap, canvas, density) = newCanvas(context, widthDp, heightDp)
     val w = bitmap.width.toFloat()
     val h = bitmap.height.toFloat()
@@ -207,7 +122,7 @@ internal object WidgetCharts {
       label.color = if (isToday) TEXT else MUTED
       canvas.drawText(initials[i], cx, h - 1 * density, label)
     }
-    return save(context, bitmap, "day-by-day")
+    return bitmap
   }
 
   /** Rounds a chart maximum up to 1, 2 or 5 times a power of ten, like the Overview scale label. */
@@ -252,12 +167,6 @@ internal object WidgetCharts {
     }
   }
 
-  private fun startOfDay(calendar: Calendar): Calendar = (calendar.clone() as Calendar).apply {
-    set(Calendar.HOUR_OF_DAY, 0)
-    set(Calendar.MINUTE, 0)
-    set(Calendar.SECOND, 0)
-    set(Calendar.MILLISECOND, 0)
-  }
 
-  private fun dayKey(c: Calendar) = "${c.get(Calendar.YEAR)}-${c.get(Calendar.DAY_OF_YEAR)}"
+
 }

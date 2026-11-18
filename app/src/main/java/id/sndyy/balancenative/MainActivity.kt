@@ -81,6 +81,7 @@ class MainActivity : ComponentActivity() {
     super.onResume()
     UiEvents.resumed()
     balance.core.ensureListenerBound()
+    id.sndyy.balancenative.widget.Widgets.refresh(this)
     lifecycleScope.launch {
       // Re-open = re-read: rules may have changed with an app update, and the day may have rolled over.
       if (balance.account.state.value !is AccountState.None) runCatching { balance.core.applyBundledRules() }
@@ -89,7 +90,8 @@ class MainActivity : ComponentActivity() {
 
   private fun handle(intent: Intent?) {
     val uri = intent?.data ?: return
-    if (uri.scheme != "balancenative") return
+    // Plain "balancenative://" (a widget tap) just opens the app where it was; only activity links navigate.
+    if (uri.scheme != "balancenative" || uri.host != "activity") return
     landing.value = Landing(uri.getQueryParameter("f"), uri.getQueryParameter("fix")?.toLongOrNull())
   }
 }
