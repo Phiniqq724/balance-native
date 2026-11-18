@@ -3,6 +3,7 @@ package id.sndyy.balancenative.ui.overview
 import android.app.Application
 import android.content.Context
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -143,7 +144,7 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
     return minOf(monday(book.today), monday(mid).plusWeeks(3))
   }
 
-  fun lastWeek(book: Book): LocalDate {
+  fun lastWeek(book: Book, view: AtlasView = this.view): LocalDate {
     val now = monday(book.today)
     return when (view) {
       AtlasView.YEAR -> now
@@ -225,17 +226,25 @@ private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (Str
       AccessBanner(vm::openAccess)
     }
 
-    AtlasGrid(
-      book = book,
-      selection = sel,
-      view = vm.view,
-      lastWeek = vm.lastWeek(book),
-      cursor = cursor,
-      onTap = { vm.tap(book, it) },
-      onDrag = { a, b, done -> vm.drag(book, a, b, done) },
-      onHold = vm::held,
-      modifier = Modifier.padding(start = Space.page, end = Space.page, top = 20.dp),
-    )
+    // Switching view (drilling in, the year preset) crossfades while the height eases to the new grid.
+    androidx.compose.animation.Crossfade(
+      targetState = vm.view,
+      animationSpec = androidx.compose.animation.core.tween(180),
+      modifier = Modifier.animateContentSize(androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow)),
+      label = "atlasView",
+    ) { v ->
+      AtlasGrid(
+        book = book,
+        selection = sel,
+        view = v,
+        lastWeek = vm.lastWeek(book, v),
+        cursor = cursor,
+        onTap = { vm.tap(book, it) },
+        onDrag = { a, b, done -> vm.drag(book, a, b, done) },
+        onHold = vm::held,
+        modifier = Modifier.padding(start = Space.page, end = Space.page, top = 20.dp),
+      )
+    }
 
     Caption(stats, vm, book)
 

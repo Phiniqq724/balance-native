@@ -45,12 +45,63 @@ import kotlin.math.min
 private val LABEL_ROW = 16.dp
 private const val HOLD_MS = 150L
 
-private fun gapOf(view: AtlasView): Dp = when (view) { AtlasView.WEEKS -> 2.5.dp; AtlasView.DAYS -> 4.dp; AtlasView.YEAR -> 1.dp }
+private fun gapOf(view: AtlasView): Dp = when (view) { AtlasView.WEEKS -> 2.5.dp; AtlasView.DAYS -> 4.dp; AtlasView.YEAR -> 4.dp }
 
 /**
- * The Atlas: the heat grid as navigation. Weeks are columns ending with [lastWeek], Monday on top.
- * Tap selects a week (20W), a day (8W) or a month (year). Hold 150ms, then drag, for a range: until
- * then the touch is left for the page and the tab pager, so flicks still scroll. One Canvas.
+ * Where each cell sits in time. Weeks and days: columns are weeks, rows are weekdays. Year: columns
+ * are the 12 months, rows are its five runs of days (1-7, 8-14, 15-21, 22-28, 29-end), so a year
+ * keeps big, tappable cells and roughly the same height as the other views instead of 53 slivers.
+ */
+private class Layout(val view: AtlasView, lastWeek: LocalDate, val lastMonth: LocalDate) {
+  val cols = if (view == AtlasView.YEAR) 12 else view.weeks
+  val rows = if (view == AtlasView.YEAR) 5 else 7
+  val firstWeek: LocalDate = lastWeek.minusWeeks((cols - 1).toLong())
+  val firstMonth: LocalDate = lastMonth.minusMonths(11)
+
+  fun start(col: Int, row: Int): LocalDate? {
+    if (view != AtlasView.YEAR) return firstWeek.plusWeeks(col.toLong()).plusDays(row.toLong())
+    val m = firstMonth.plusMonths(col.toLong())
+    return if (row * 7 < m.lengthOfMonth()) m.plusDays(row * 7L) else null
+  }
+
+  fun end(col: Int, row: Int): LocalDate? {
+    val s = start(col, row) ?: return null
+    if (view != AtlasView.YEAR) return s
+    return if (row == 4) s.withDayOfMonth(s.lengthOfMonth()) else s.plusDays(6)
+  }
+
+  fun columnStart(col: Int): LocalDate = if (view == AtlasView.YEAR) firstMonth.plusMonths(col.toLong()) else firstWeek.plusWeeks(col.toLong())
+}
+
+/** Heat for the year view's day runs: quartiles of the runs themselves, so a busy week reads hot. */
+private fun runLevels(book: Book, layout: Layout): Array<IntArray> {
+  val totals = Array(layout.cols) { col -> LongArray(layout.rows) { row ->
+    val s = layout.start(col, row)
+    if (s == null) -1 else book.spent(s, layout.end(col, row)!!)
+  } }
+  val spending = totals.flatMap { it.toList() }.filter { it > 0 }.sorted()
+  fun q(p: Double) = spending[((spending.size - 1) * p).toInt()]
+  return Array(layout.cols) { col -> IntArray(layout.rows) { row ->
+    val s = layout.start(col, row)
+    val v = totals[col][row]
+    when {
+      s == null -> -3
+      s.isAfter(book.today) -> -1
+      book.firstData == null || layout.end(col, row)!!.isBefore(book.firstData) -> -2
+      v <= 0 || spending.isEmpty() -> 0
+      v <= q(0.25) -> 1
+      v <= q(0.5) -> 2
+      v <= q(0.75) -> 3
+      else -> 4
+    }
+  } }
+}
+
+/**
+ * The Atlas: the heat grid as navigation. Weeks are columns ending with [lastWeek], Monday on top;
+ * the year view is months by runs of days. Tap selects a week (20W), a day (8W) or a month (year).
+ * Hold 150ms, then drag, for a range: until then the touch is left for the page and the tab pager,
+ * so flicks still scroll. One Canvas.
  */
 @Composable
 fun AtlasGrid(
@@ -72,28 +123,36 @@ fun AtlasGrid(
   val labelStyle = remember { TextStyle(fontFamily = Satoshi, fontWeight = FontWeight.Medium, fontSize = 10.sp, color = Ember.muted) }
   val dayStyle = remember { TextStyle(fontFamily = Satoshi, fontWeight = FontWeight.Medium, fontSize = 11.sp) }
 
+  // The year shows the 12 months ending this month, or ending 11 months after an older selection.
+  val nowMonth = book.today.withDayOfMonth(1)
+  val selMonth = selection.start.withDayOfMonth(1)
+  val lastMonth = if (selMonth.isBefore(nowMonth.minusMonths(11))) selMonth.plusMonths(11) else nowMonth
+  val layout = remember(view, lastWeek, lastMonth) { Layout(view, lastWeek, lastMonth) }
+  val runs = remember(book, layout) { if (view == AtlasView.YEAR) runLevels(book, layout) else null }
+
   BoxWithConstraints(modifier.fillMaxWidth()) {
-    val cols = view.weeks
+    val cols = layout.cols
+    val rows = layout.rows
     val gap = gapOf(view)
     val cell = (maxWidth - gap * (cols - 1)) / cols
-    val height = LABEL_ROW + cell * 7 + gap * 6 + 4.dp
-    val firstWeek = lastWeek.minusWeeks((cols - 1).toLong())
+    val height = LABEL_ROW + cell * rows + gap * (rows - 1) + 4.dp
 
     Canvas(
       Modifier
         .fillMaxWidth()
         .height(height)
         .semantics { contentDescription = "Spending grid. Selected ${selectionLabel(selection)}." }
-        .pointerInput(view, firstWeek, cell) {
+        .pointerInput(layout, cell) {
           val pitch = (cell + gap).toPx()
           val top = LABEL_ROW.toPx()
           fun dayAt(o: Offset): LocalDate {
             val c = floor((o.x + gap.toPx() / 2) / pitch).toInt().coerceIn(0, cols - 1)
-            val r = floor((o.y - top + gap.toPx() / 2) / pitch).toInt().coerceIn(0, 6)
-            return firstWeek.plusWeeks(c.toLong()).plusDays(r.toLong())
+            var r = floor((o.y - top + gap.toPx() / 2) / pitch).toInt().coerceIn(0, rows - 1)
+            while (layout.start(c, r) == null) r--
+            return layout.start(c, r)!!
           }
           fun sameUnit(a: LocalDate, b: LocalDate) = when (view) {
-            AtlasView.WEEKS -> a.minusDays(a.dayOfWeek.value - 1L) == b.minusDays(b.dayOfWeek.value - 1L)
+            AtlasView.WEEKS -> weekOf(a) == weekOf(b)
             AtlasView.DAYS -> a == b
             AtlasView.YEAR -> a.year == b.year && a.month == b.month
           }
@@ -145,29 +204,27 @@ fun AtlasGrid(
       val g = gap.toPx()
       val top = LABEL_ROW.toPx()
       val pitch = c + g
-      val radius = CornerRadius(min(2.dp.toPx(), c * 0.25f))
+      val radius = CornerRadius(min(if (view == AtlasView.YEAR) 3.dp.toPx() else 2.dp.toPx(), c * 0.25f))
       fun x(col: Int) = col * pitch
       fun y(row: Int) = top + row * pitch
 
-      // Month names over the column where each month starts.
-      var lastMonth = -1
+      // Month names: every column on the year view, else over the column where each month starts.
+      var lastM = -1
       var lastLabel = -9
       for (col in 0 until cols) {
-        val m = firstWeek.plusWeeks(col.toLong()).monthValue
-        if (m != lastMonth) {
-          if (col - lastLabel >= 3) {
-            val name = Format.shortMonth(firstWeek.plusWeeks(col.toLong()))
-            drawText(measurer.measure(if (view == AtlasView.YEAR) name.take(1) else name, labelStyle), topLeft = Offset(x(col), 0f))
-            lastLabel = col
-          }
-          lastMonth = m
+        val d = layout.columnStart(col)
+        if (view == AtlasView.YEAR) {
+          drawText(measurer.measure(Format.shortMonth(d), labelStyle), topLeft = Offset(x(col), 0f))
+        } else if (d.monthValue != lastM) {
+          if (col - lastLabel >= 3) { drawText(measurer.measure(Format.shortMonth(d), labelStyle), topLeft = Offset(x(col), 0f)); lastLabel = col }
+          lastM = d.monthValue
         }
       }
 
-      // The selection is one soft shape: the union of each week's selected run, rounded at every
+      // The selection is one soft shape: the union of each column's selected run, rounded at every
       // corner. A faint ink wash fills it (it shows in the gaps), then a rounded ink line rims it.
-      val shape = if (view == AtlasView.YEAR) null else selectionShape(selection, book.today, firstWeek, cols, c, g, top, 1.5.dp.toPx())
-      val corner = android.graphics.CornerPathEffect(4.dp.toPx())
+      val shape = selectionShape(selection, book.today, layout, c, g, top, 1.5.dp.toPx())
+      val corner = android.graphics.CornerPathEffect(if (view == AtlasView.YEAR) 6.dp.toPx() else 4.dp.toPx())
       shape?.let { p ->
         drawContext.canvas.nativeCanvas.drawPath(p, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
           style = android.graphics.Paint.Style.FILL
@@ -176,12 +233,12 @@ fun AtlasGrid(
         })
       }
 
-      for (col in 0 until cols) for (row in 0 until 7) {
-        val d = firstWeek.plusWeeks(col.toLong()).plusDays(row.toLong())
-        val level = book.level(d)
+      for (col in 0 until cols) for (row in 0 until rows) {
+        val d = layout.start(col, row) ?: continue
+        val level = runs?.get(col)?.get(row) ?: book.level(d)
         val at = Offset(x(col), y(row))
         when (level) {
-          -2 -> Unit
+          -3, -2 -> Unit
           -1 -> drawCircle(Ember.selected, radius = (c * 0.1f).coerceIn(0.8.dp.toPx(), 1.6.dp.toPx()), center = at + Offset(c / 2, c / 2))
           else -> {
             drawRoundRect(Ember.heat[level], at, Size(c, c), radius)
@@ -191,52 +248,39 @@ fun AtlasGrid(
             }
           }
         }
-        if (d == book.today) drawRect(Ember.muted, at + Offset(c * 0.2f, c + min(g * 0.5f, 1.2.dp.toPx()) - 0.75.dp.toPx()), Size(c * 0.6f, 1.5.dp.toPx()))
+        val end = layout.end(col, row)!!
+        if (!book.today.isBefore(d) && !book.today.isAfter(end)) drawRect(Ember.muted, at + Offset(c * 0.2f, c + min(g * 0.5f, 1.2.dp.toPx()) - 0.75.dp.toPx()), Size(c * 0.6f, 1.5.dp.toPx()))
         if (cursor != null && d == cursor && view != AtlasView.YEAR) drawRoundRect(Ember.text, at, Size(c, c), radius)
       }
 
-      val stroke = 1.5.dp.toPx()
-      if (view == AtlasView.YEAR) {
-        // Cells are too small to outline: a bracket over the selected weeks instead.
-        val a = ((selection.start.toEpochDay() - firstWeek.toEpochDay()) / 7).toInt().coerceIn(0, cols - 1)
-        val b = ((selection.end.toEpochDay() - firstWeek.toEpochDay()) / 7).toInt().coerceIn(0, cols - 1)
-        val path = Path().apply {
-          moveTo(x(a) + stroke / 2, top - 1.dp.toPx())
-          lineTo(x(a) + stroke / 2, top - 4.5.dp.toPx())
-          lineTo(x(b) + c - stroke / 2, top - 4.5.dp.toPx())
-          lineTo(x(b) + c - stroke / 2, top - 1.dp.toPx())
-        }
-        drawPath(path, Ember.text, style = Stroke(stroke, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
-      } else {
-        shape?.let { p ->
-          drawContext.canvas.nativeCanvas.drawPath(p, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            style = android.graphics.Paint.Style.STROKE
-            strokeWidth = stroke
-            color = Ember.text.copy(alpha = 0.92f).toArgb()
-            pathEffect = corner
-          })
-        }
+      shape?.let { p ->
+        drawContext.canvas.nativeCanvas.drawPath(p, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+          style = android.graphics.Paint.Style.STROKE
+          strokeWidth = 1.5.dp.toPx()
+          color = Ember.text.copy(alpha = 0.92f).toArgb()
+          pathEffect = corner
+        })
       }
     }
   }
 }
 
 /**
- * Union of one rectangle per week column (a contiguous range is one run per column), pushed out
- * past the gap by [pad] so the rim never touches a cell. Plain rectangles union cleanly; the corner
- * effect then rounds convex and concave corners alike.
+ * Union of one rectangle per column (a contiguous range is one run per column), pushed out past the
+ * gap by [pad] so the rim never touches a cell. Plain rectangles union cleanly; the corner effect then
+ * rounds convex and concave corners alike.
  */
-private fun selectionShape(sel: Selection, today: LocalDate, firstWeek: LocalDate, cols: Int, c: Float, g: Float, top: Float, pad: Float): android.graphics.Path? {
+private fun selectionShape(sel: Selection, today: LocalDate, layout: Layout, c: Float, g: Float, top: Float, pad: Float): android.graphics.Path? {
   val o = g / 2 + pad
   val pitch = c + g
   var out: android.graphics.Path? = null
-  for (col in 0 until cols) {
-    val monday = firstWeek.plusWeeks(col.toLong())
+  for (col in 0 until layout.cols) {
     var first = -1
     var last = -1
-    for (row in 0 until 7) {
-      val d = monday.plusDays(row.toLong())
-      if (d in sel && !d.isAfter(today)) { if (first < 0) first = row; last = row }
+    for (row in 0 until layout.rows) {
+      val s = layout.start(col, row) ?: continue
+      val e = layout.end(col, row)!!
+      if (!s.isAfter(sel.end) && !e.isBefore(sel.start) && !s.isAfter(today)) { if (first < 0) first = row; last = row }
     }
     if (first < 0) continue
     val r = android.graphics.Path().apply {

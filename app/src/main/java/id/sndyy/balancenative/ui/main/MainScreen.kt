@@ -28,8 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.ReceiptLong
-import androidx.compose.material.icons.rounded.ShowChart
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
+import androidx.compose.material.icons.automirrored.rounded.ShowChart
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -74,8 +74,8 @@ import kotlinx.coroutines.launch
 private data class Tab(val label: String, val icon: ImageVector)
 
 private val TABS = listOf(
-  Tab("Overview", Icons.Rounded.ShowChart),
-  Tab("Activity", Icons.Rounded.ReceiptLong),
+  Tab("Overview", Icons.AutoMirrored.Rounded.ShowChart),
+  Tab("Activity", Icons.AutoMirrored.Rounded.ReceiptLong),
   Tab("Profile", Icons.Rounded.Person),
 )
 
