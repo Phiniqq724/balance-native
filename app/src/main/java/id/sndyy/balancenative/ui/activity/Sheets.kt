@@ -30,8 +30,6 @@ import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
@@ -66,6 +64,7 @@ import id.sndyy.balancenative.data.ReviewState
 import id.sndyy.balancenative.data.Transaction
 import id.sndyy.balancenative.data.Unparsed
 import id.sndyy.balancenative.ui.kit.Chip
+import id.sndyy.balancenative.ui.kit.EmberSwitch
 import id.sndyy.balancenative.ui.kit.Field
 import id.sndyy.balancenative.ui.kit.Label
 import id.sndyy.balancenative.ui.kit.Money
@@ -141,13 +140,12 @@ fun TxSheet(tx: Transaction, categories: List<Category>, label: (String) -> Stri
         Label("Between my own accounts", weight = FontWeight.Medium)
         Label("Kept out of spending and income.", size = 13.sp, tone = Tone.MUTED)
       }
-      Switch(
+      EmberSwitch(
         checked = isTransfer,
         onCheckedChange = { value ->
           isTransfer = value
           scope.launch { runCatching { core.setTransfer(tx.id, value) }.onFailure { isTransfer = !value; error = "Couldn't save that change." } }
         },
-        colors = SwitchDefaults.colors(checkedTrackColor = Ember.text, checkedThumbColor = Ember.bg),
       )
     }
     error?.let { Label(it, size = 14.sp, tone = Tone.DANGER) }

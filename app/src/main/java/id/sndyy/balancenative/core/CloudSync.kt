@@ -322,7 +322,12 @@ internal object CloudSync {
   }
 
   /** One full sync for [userId]. Throws on network or auth failure; nothing half-applied is lost (every step is re-runnable). */
-  fun run(context: Context, userId: String) {
+  private val running = Any()
+
+  fun run(context: Context, userId: String) = synchronized(running) { runLocked(context, userId) }
+
+  // One sync at a time per process: the worker and a pull-to-refresh never interleave.
+  private fun runLocked(context: Context, userId: String) {
     val app = context.applicationContext
     val db = BalanceDb.get(app)
     if (Account.userId(app) != userId) throw IllegalStateException("Account changed")

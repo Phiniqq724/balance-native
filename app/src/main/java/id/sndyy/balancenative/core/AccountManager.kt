@@ -109,6 +109,12 @@ class AccountManager(context: Context, private val core: BalanceCore) {
     runCatching { CloudSync.run(app, userId) }.isSuccess
   }
 
+  /** Pull to refresh: sync now and wait for it. False when offline or signed out. */
+  suspend fun refresh(): Boolean {
+    val signed = _state.value as? AccountState.Signed ?: return false
+    return syncNow(signed.user.id)
+  }
+
   /**
    * Stops syncing and keeps everything on this phone. Nothing in the cloud is deleted. Syncs first so
    * rows from other devices come along; refuses rather than leave them behind.

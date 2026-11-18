@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -84,22 +85,27 @@ fun FlowChart(props: FlowChartProps, modifier: Modifier = Modifier) {
         if (count == 0) return@pointerInput
         fun indexAt(x: Float) = ((x / size.width) * count).toInt().coerceIn(0, count - 1)
         awaitEachGesture {
-          val down = awaitFirstDown()
-          // Keep the page swiper from stealing a horizontal scrub that starts on the chart.
-          view.parent?.requestDisallowInterceptTouchEvent(true)
+          // The chart owns the whole touch from the moment a finger lands: nothing above it (page
+          // scroll, tab swiper) moves while scrubbing. Consuming on the Initial pass runs before any
+          // ancestor's drag detection, which in Compose is the only way to "disallow intercept".
+          val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+          down.consume()
           touched = indexAt(down.position.x)
           view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
           while (true) {
-            val event = awaitPointerEvent()
-            val change = event.changes.firstOrNull() ?: break
-            if (!change.pressed) break
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+            if (!change.pressed) {
+              change.consume()
+              break
+            }
+            change.consume()
             val next = indexAt(change.position.x)
             // A light tick per slot, so scrubbing feels like a dial.
             if (next != touched) view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
             touched = next
           }
           touched = null
-          view.parent?.requestDisallowInterceptTouchEvent(false)
         }
       }
   ) {

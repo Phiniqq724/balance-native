@@ -70,7 +70,6 @@ import id.sndyy.balancenative.core.FlowChartProps
 import id.sndyy.balancenative.core.SyncWorker
 import id.sndyy.balancenative.data.Analysis
 import id.sndyy.balancenative.data.Analytics
-import id.sndyy.balancenative.data.Flow
 import id.sndyy.balancenative.data.Format
 import id.sndyy.balancenative.data.HeatCell
 import id.sndyy.balancenative.data.Heatmap
@@ -83,13 +82,20 @@ import id.sndyy.balancenative.ui.kit.Loading
 import id.sndyy.balancenative.ui.kit.Money
 import id.sndyy.balancenative.ui.kit.Rule
 import id.sndyy.balancenative.ui.kit.SectionHead
+import id.sndyy.balancenative.ui.kit.SyncRefresh
 import id.sndyy.balancenative.ui.kit.Tone
 import id.sndyy.balancenative.ui.kit.UiEvents
 import id.sndyy.balancenative.ui.kit.ledgerState
 import id.sndyy.balancenative.ui.kit.shade
 import id.sndyy.balancenative.ui.theme.Ember
 import id.sndyy.balancenative.ui.theme.Space
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import id.sndyy.balancenative.ui.theme.Satoshi
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -99,7 +105,14 @@ import kotlin.math.roundToInt
 
 private const val WEEKS = 20
 
-data class OverviewData(val now: LocalDateTime, val flows: List<Flow>, val grid: List<List<HeatCell>>, val hasAccess: Boolean)
+data class OverviewData(
+  val now: LocalDateTime,
+  val empty: Boolean,
+  /** Every period worked out up front, so switching is instant and nothing heavy runs while drawing. */
+  val analyses: Map<Period, Analysis>,
+  val grid: List<List<HeatCell>>,
+  val hasAccess: Boolean,
+)
 
 class OverviewViewModel(app: Application) : AndroidViewModel(app) {
   private val core = app.balance.core
@@ -108,7 +121,15 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
     val now = LocalDateTime.now()
     val since = min(Analytics.start(now), Format.startOfDayMs(Heatmap.start(WEEKS, now.toLocalDate())))
     val flows = core.flows(since)
-    OverviewData(now, flows, Heatmap.build(flows, WEEKS, now.toLocalDate()), core.hasNotificationAccess())
+    withContext(Dispatchers.Default) {
+      OverviewData(
+        now = now,
+        empty = flows.isEmpty(),
+        analyses = Period.entries.associateWith { Analytics.analyze(flows, it, now) },
+        grid = Heatmap.build(flows, WEEKS, now.toLocalDate()),
+        hasAccess = core.hasNotificationAccess(),
+      )
+    }
   }
 
   fun openAccess() = core.openNotificationAccessSettings()
@@ -119,26 +140,11 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
 fun OverviewScreen(onCategory: (String) -> Unit, vm: OverviewViewModel = viewModel()) {
   val state by vm.state.collectAsState()
   var period by rememberSaveable { mutableStateOf(Period.MONTH) }
-  val context = androidx.compose.ui.platform.LocalContext.current
-  val scope = rememberCoroutineScope()
-  var refreshing by remember { mutableStateOf(false) }
 
   when (val s = state) {
     Loaded.Loading -> Loading()
     is Loaded.Error -> Failed("Couldn't read your ledger.") { UiEvents.retry() }
-    is Loaded.Ready -> PullToRefreshBox(
-      isRefreshing = refreshing,
-      onRefresh = {
-        // Pull to refresh = sync only (no re-read), like the Expo app.
-        scope.launch {
-          refreshing = true
-          SyncWorker.request(context, delaySeconds = 0)
-          UiEvents.retry()
-          delay(700)
-          refreshing = false
-        }
-      },
-    ) {
+    is Loaded.Ready -> SyncRefresh {
       Overview(s.data, period, { period = it }, vm::openAccess, onCategory)
     }
   }
@@ -146,8 +152,8 @@ fun OverviewScreen(onCategory: (String) -> Unit, vm: OverviewViewModel = viewMod
 
 @Composable
 private fun Overview(data: OverviewData, period: Period, onPeriod: (Period) -> Unit, onAllowAccess: () -> Unit, onCategory: (String) -> Unit) {
-  val a = remember(data, period) { Analytics.analyze(data.flows, period, data.now) }
-  val empty = data.flows.isEmpty()
+  val a = data.analyses.getValue(period)
+  val empty = data.empty
 
   Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding()) {
     AnimatedVisibility(!data.hasAccess, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
@@ -166,7 +172,7 @@ private fun Overview(data: OverviewData, period: Period, onPeriod: (Period) -> U
       },
       label = "headline",
     ) { p ->
-      val pa = if (p == period) a else Analytics.analyze(data.flows, p, data.now)
+      val pa = data.analyses.getValue(p)
       Column(Modifier.padding(start = Space.page, end = Space.page, top = 28.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Label("Spent", size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
         Money(pa.spent)
@@ -298,29 +304,28 @@ private fun LegendKey(label: String, dashed: Boolean = false, tint: Color = Embe
   }
 }
 
-/** Same grid as the home-screen widget, Monday on top. Cells bloom in column by column on first show. */
+/** Same grid as the home-screen widget, Monday on top. One Canvas, so 140 days cost one draw. */
 @Composable
 private fun SpendGrid(columns: List<List<HeatCell>>) {
   SectionHead("Last $WEEKS weeks")
-  var shown by remember { mutableStateOf(false) }
-  LaunchedEffect(Unit) { shown = true }
+  val measurer = rememberTextMeasurer()
+  val dayStyle = TextStyle(fontFamily = Satoshi, fontWeight = FontWeight.Medium, fontSize = 10.sp, color = Ember.muted)
   BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = Space.page)) {
     val gap = 3.dp
     val labelWidth = 18.dp
     val cell = (maxWidth - labelWidth - gap * (columns.size - 1)) / columns.size
-    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-      Column(Modifier.width(labelWidth - gap), verticalArrangement = Arrangement.spacedBy(gap)) {
-        listOf("M", "", "W", "", "F", "", "S").forEach { d ->
-          Box(Modifier.height(cell), contentAlignment = Alignment.CenterStart) { Label(d, size = 10.sp, weight = FontWeight.Medium, tone = Tone.MUTED) }
-        }
+    Canvas(Modifier.fillMaxWidth().height(cell * 7 + gap * 6)) {
+      val c = cell.toPx()
+      val g = gap.toPx()
+      val left = labelWidth.toPx()
+      val r = CornerRadius(3.dp.toPx())
+      listOf(0 to "M", 2 to "W", 4 to "F", 6 to "S").forEach { (row, d) ->
+        val layout = measurer.measure(d, dayStyle)
+        drawText(layout, topLeft = Offset(0f, row * (c + g) + (c - layout.size.height) / 2))
       }
       columns.forEachIndexed { w, week ->
-        val scale by animateFloatAsState(if (shown) 1f else 0.4f, tween(320, delayMillis = w * 18), label = "cell")
-        val alpha by animateFloatAsState(if (shown) 1f else 0f, tween(320, delayMillis = w * 18), label = "cellAlpha")
-        Column(verticalArrangement = Arrangement.spacedBy(gap), modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale; this.alpha = alpha }) {
-          week.forEach { day ->
-            Box(Modifier.size(cell).clip(RoundedCornerShape(3.dp)).background(if (day.level < 0) Ember.bg else Ember.heat[day.level]))
-          }
+        week.forEachIndexed { d, day ->
+          if (day.level >= 0) drawRoundRect(Ember.heat[day.level], Offset(left + w * (c + g), d * (c + g)), Size(c, c), r)
         }
       }
     }

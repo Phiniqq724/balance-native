@@ -69,6 +69,7 @@ import id.sndyy.balancenative.ui.kit.Label
 import id.sndyy.balancenative.ui.kit.Loaded
 import id.sndyy.balancenative.ui.kit.Loading
 import id.sndyy.balancenative.ui.kit.Rule
+import id.sndyy.balancenative.ui.kit.SyncRefresh
 import id.sndyy.balancenative.ui.kit.Tone
 import id.sndyy.balancenative.ui.kit.UiEvents
 import id.sndyy.balancenative.ui.kit.ledgerState
@@ -176,9 +177,6 @@ fun ActivityScreen(landing: Pair<String?, Long?>?, onLandingUsed: () -> Unit, vm
   val apps by vm.apps.collectAsState()
   var openId by remember { mutableStateOf<Long?>(null) }
   var fixId by remember { mutableStateOf<Long?>(null) }
-  val context = LocalContext.current
-  val scope = rememberCoroutineScope()
-  var refreshing by remember { mutableStateOf(false) }
 
   LaunchedEffect(landing) {
     landing ?: return@LaunchedEffect
@@ -215,18 +213,7 @@ fun ActivityScreen(landing: Pair<String?, Long?>?, onLandingUsed: () -> Unit, vm
   val open = page?.transactions?.firstOrNull { it.id == openId }
   val shown = if (reviewing) notes.size else page?.total ?: 0
 
-  PullToRefreshBox(
-    isRefreshing = refreshing,
-    onRefresh = {
-      scope.launch {
-        refreshing = true
-        SyncWorker.request(context, delaySeconds = 0)
-        delay(700)
-        refreshing = false
-      }
-    },
-    modifier = Modifier.fillMaxSize(),
-  ) {
+  SyncRefresh {
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
       Column(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 28.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {

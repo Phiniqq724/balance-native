@@ -29,8 +29,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -63,6 +61,7 @@ import id.sndyy.balancenative.ui.activity.AppIcon
 import id.sndyy.balancenative.ui.activity.Sheet
 import id.sndyy.balancenative.ui.activity.primaryButtonColors
 import id.sndyy.balancenative.ui.kit.Chip
+import id.sndyy.balancenative.ui.kit.EmberSwitch
 import id.sndyy.balancenative.ui.kit.Field
 import id.sndyy.balancenative.ui.kit.Label
 import id.sndyy.balancenative.ui.kit.Loaded
@@ -202,7 +201,7 @@ private fun ToggleRow(title: String, subtitle: String, checked: Boolean, enabled
       Label(title, weight = FontWeight.Medium, tone = if (enabled) Tone.TEXT else Tone.MUTED)
       Label(subtitle, size = 13.sp, tone = Tone.MUTED)
     }
-    Switch(checked, onChange, enabled = enabled, colors = SwitchDefaults.colors(checkedTrackColor = Ember.text, checkedThumbColor = Ember.bg))
+    EmberSwitch(checked, onChange, enabled = enabled)
   }
 }
 
@@ -250,7 +249,7 @@ private fun AppPicker(apps: List<InstalledApp>, watched: List<String>, onClose: 
         ) {
           AppIcon(app, app.label, size = 32)
           Label(app.label, Modifier.weight(1f), weight = FontWeight.Medium, maxLines = 1)
-          Switch(on, { selected = if (it) selected + app.packageName else selected - app.packageName }, colors = SwitchDefaults.colors(checkedTrackColor = Ember.text, checkedThumbColor = Ember.bg))
+          EmberSwitch(on, { selected = if (it) selected + app.packageName else selected - app.packageName })
         }
       }
     }
