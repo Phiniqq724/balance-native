@@ -67,6 +67,8 @@ import id.sndyy.balancenative.ui.kit.Chip
 import id.sndyy.balancenative.ui.kit.EmberSwitch
 import id.sndyy.balancenative.ui.kit.Field
 import id.sndyy.balancenative.ui.kit.Label
+import id.sndyy.balancenative.ui.kit.CellButton
+import id.sndyy.balancenative.ui.kit.SqueezeRow
 import id.sndyy.balancenative.ui.kit.Money
 import id.sndyy.balancenative.ui.kit.Rule
 import id.sndyy.balancenative.ui.kit.RupiahGrouping
@@ -208,11 +210,14 @@ private fun ReviewActions(n: Unparsed, openFix: Boolean) {
   var fixing by remember(n.id) { mutableStateOf(openFix) }
   var busy by remember(n.id) { mutableStateOf(false) }
   var error by remember(n.id) { mutableStateOf<String?>(null) }
+  /** Which answer was committed: it fills with ink while the card leaves. */
+  var chosen by remember(n.id) { mutableStateOf<String?>(null) }
   val suggestion = verdictOf(n)
 
-  fun send(v: Verdict) {
+  fun send(v: Verdict, which: String) {
     if (busy) return
     busy = true
+    chosen = which
     error = null
     view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
     scope.launch {
@@ -225,6 +230,7 @@ private fun ReviewActions(n: Unparsed, openFix: Boolean) {
       } catch (e: Exception) {
         error = "Couldn't save. Try again."
         busy = false
+        chosen = null
       }
     }
   }
@@ -238,14 +244,30 @@ private fun ReviewActions(n: Unparsed, openFix: Boolean) {
     } else {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (suggestion != null) Label(question(suggestion), weight = FontWeight.Medium) else Label("Couldn't read this one.", size = 14.sp, tone = Tone.MUTED)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-          if (suggestion != null) {
-            Button(onClick = { send(suggestion) }, enabled = !busy, colors = primaryButtonColors()) { Label("Yes", weight = FontWeight.Medium, color = Ember.bg) }
-          }
-          TextButton(onClick = { fixing = true }, enabled = !busy) { Label(if (suggestion != null) "Fix" else "Add", weight = FontWeight.Medium) }
-          if (suggestion?.kind != AiKind.AD_OR_OTHER) {
-            TextButton(onClick = { send(NOT_A_TRANSACTION) }, enabled = !busy) { Label("Not money", weight = FontWeight.Medium, tone = Tone.MUTED) }
-          }
+        // Answers are commitments: neutral cells at rest that swell on press, and the one you commit
+        // turns ink while the card leaves.
+        val answers = buildList {
+          if (suggestion != null) add("yes" to "Yes")
+          add("fix" to if (suggestion != null) "Fix" else "Add")
+          if (suggestion?.kind != AiKind.AD_OR_OTHER) add("no" to "Not money")
+        }
+        SqueezeRow(answers.size, Modifier.fillMaxWidth().padding(top = 4.dp), spacing = 4.dp) { i, source, weight ->
+          val (key, label) = answers[i]
+          CellButton(
+            on = chosen == key,
+            onClick = {
+              if (busy) return@CellButton
+              when (key) {
+                "yes" -> send(suggestion!!, key)
+                "fix" -> fixing = true
+                else -> send(NOT_A_TRANSACTION, key)
+              }
+            },
+            modifier = weight,
+            source = source,
+            height = 44.dp,
+            face = Ember.raised,
+          ) { fg -> Label(label, size = 14.sp, weight = FontWeight.Bold, color = fg, maxLines = 1) }
         }
         error?.let { Label(it, size = 14.sp, tone = Tone.DANGER) }
       }
@@ -255,7 +277,7 @@ private fun ReviewActions(n: Unparsed, openFix: Boolean) {
   if (fixing) {
     FixSheet(suggestion?.takeIf { it.kind != AiKind.AD_OR_OTHER }, onClose = { fixing = false }) { v ->
       fixing = false
-      send(v)
+      send(v, "fix")
     }
   }
 }

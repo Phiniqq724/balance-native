@@ -1,7 +1,14 @@
 package id.sndyy.balancenative.ui.kit
 
-import android.view.HapticFeedbackConstants
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -30,25 +37,32 @@ import id.sndyy.balancenative.data.Format
 import id.sndyy.balancenative.ui.theme.Ember
 import id.sndyy.balancenative.ui.theme.Satoshi
 
-/** Selected = bright cream on charcoal, like a lit key. Colors ease rather than snap. */
+/**
+ * A filter or category chip, cut like a large cell (6dp corners). Selected is ink. A press sinks it a
+ * dp, darkens the face and swells its padding on a spring, so neighbours in a row get nudged aside:
+ * the same squeeze as the nav, for rows that scroll instead of sharing a width.
+ */
 @Composable
 fun Chip(label: String, selected: Boolean, modifier: Modifier = Modifier, onPress: () -> Unit) {
   val view = LocalView.current
-  val bg by animateColorAsState(if (selected) Ember.text else Ember.raised, label = "chipBg")
-  val fg by animateColorAsState(if (selected) Ember.bg else Ember.text, label = "chipFg")
   val source = remember { MutableInteractionSource() }
-  val scale = rememberPressScale(source, 0.94f)
+  val pressed by source.collectIsPressedAsState()
+  val bg by animateColorAsState(if (selected) Ember.text else Ember.surface, label = "chipBg")
+  val fg by animateColorAsState(if (selected) Ember.bg else Ember.text, label = "chipFg")
+  val pad by animateDpAsState(if (pressed) 20.dp else 14.dp, spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMediumLow), label = "chipPad")
+  val sink by animateFloatAsState(if (pressed) 1f else 0f, spring(stiffness = Spring.StiffnessHigh), label = "chipSink")
+  val density = LocalDensity.current
   Label(
     label,
     modifier
-      .graphicsLayer { scaleX = scale; scaleY = scale }
-      .clip(RoundedCornerShape(10.dp))
-      .background(bg)
+      .graphicsLayer { translationY = sink * with(density) { 1.dp.toPx() } }
+      .clip(RoundedCornerShape(6.dp))
+      .background(lerp(bg, Color.Black, sink * 0.06f))
       .clickable(interactionSource = source, indication = null) {
-        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+        Haptic.key(view)
         onPress()
       }
-      .padding(horizontal = 14.dp, vertical = 8.dp),
+      .padding(horizontal = pad, vertical = 9.dp),
     size = 14.sp,
     weight = FontWeight.Medium,
     color = fg,

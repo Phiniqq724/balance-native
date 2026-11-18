@@ -2,8 +2,6 @@ package id.sndyy.balancenative.ui.activity
 
 import android.app.Application
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -68,7 +66,14 @@ import id.sndyy.balancenative.ui.kit.Failed
 import id.sndyy.balancenative.ui.kit.Label
 import id.sndyy.balancenative.ui.kit.Loaded
 import id.sndyy.balancenative.ui.kit.Loading
-import id.sndyy.balancenative.ui.kit.Rule
+import id.sndyy.balancenative.ui.kit.Haptic
+import id.sndyy.balancenative.ui.overview.CellMeter
+import id.sndyy.balancenative.ui.overview.cellsFor
+import id.sndyy.balancenative.data.Book
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.aspectRatio
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import id.sndyy.balancenative.ui.kit.SyncRefresh
 import id.sndyy.balancenative.ui.kit.Tone
 import id.sndyy.balancenative.ui.kit.UiEvents
@@ -117,6 +122,14 @@ class ActivityViewModel(app: Application) : AndroidViewModel(app) {
     )
   }
 
+  /** Daily spend for the week strip, read on its own so filters and search never rebuild it. */
+  val heat = viewModelScope.ledgerState {
+    val today = LocalDate.now()
+    val first = Book.firstDay(today)
+    val flows = core.flows(Format.startOfDayMs(first))
+    withContext(Dispatchers.Default) { Book(first, today, flows) }
+  }
+
   init {
     viewModelScope.launch { apps.value = core.installedApps().associateBy { it.packageName } }
     // Back to one page whenever the filter or search changes.
@@ -131,7 +144,7 @@ class ActivityViewModel(app: Application) : AndroidViewModel(app) {
 
 private sealed interface Item {
   val key: String
-  data class Day(override val key: String, val label: String, var spent: Long = 0, var received: Long = 0) : Item
+  data class Day(override val key: String, val label: String, val date: LocalDate, var spent: Long = 0, var received: Long = 0) : Item
   data class Tx(override val key: String, val tx: Transaction, val pair: Transaction?) : Item
   data class Note(override val key: String, val n: Unparsed) : Item
   data class More(override val key: String) : Item
@@ -158,7 +171,7 @@ private fun buildItems(transactions: List<Transaction>, more: String?): List<Ite
     // Both halves of an own transfer collapse into the outgoing one.
     if (pair != null && tx.direction == Direction.IN) continue
     val date = Format.date(tx.occurredAt)
-    val day = days.getOrPut(date) { Item.Day("day$date", Format.dayLabel(date)).also { items += it } }
+    val day = days.getOrPut(date) { Item.Day("day$date", Format.dayLabel(date), date).also { items += it } }
     if (!tx.isTransfer) {
       if (tx.direction == Direction.OUT) day.spent += tx.amount else day.received += tx.amount
     }
@@ -175,6 +188,7 @@ fun ActivityScreen(landing: Pair<String?, Long?>?, onLandingUsed: () -> Unit, vm
   val filter by vm.filter.collectAsState()
   val query by vm.query.collectAsState()
   val apps by vm.apps.collectAsState()
+  val heat by vm.heat.collectAsState()
   var openId by remember { mutableStateOf<Long?>(null) }
   var fixId by remember { mutableStateOf<Long?>(null) }
 
@@ -207,7 +221,7 @@ fun ActivityScreen(landing: Pair<String?, Long?>?, onLandingUsed: () -> Unit, vm
   val pending = if (filter == "all") data.unparsed.filter { found(q, it.title, it.body, vm.label(it.source)) } else emptyList()
   val list: List<Item> = if (pending.isEmpty()) items else {
     val todayKey = "day${data.today}"
-    val today = items.firstOrNull { it.key == todayKey } as? Item.Day ?: Item.Day(todayKey, "Today")
+    val today = items.firstOrNull { it.key == todayKey } as? Item.Day ?: Item.Day(todayKey, "Today", data.today)
     listOf(today) + pending.map { Item.Note("note${it.id}", it) } + items.filter { it.key != todayKey }
   }
   val open = page?.transactions?.firstOrNull { it.id == openId }
@@ -233,9 +247,24 @@ fun ActivityScreen(landing: Pair<String?, Long?>?, onLandingUsed: () -> Unit, vm
 
       SearchField(query, { vm.query.value = it }, Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 16.dp))
       FilterStrip(filter, data.categories, toCheck) { vm.setFilter(it); fixId = null }
-      Rule()
 
       val listState = rememberLazyListState()
+      val scope = rememberCoroutineScope()
+      // The strip follows the list: it shows the week of the day header at (or just above) the top.
+      val visibleDay by remember(list) {
+        derivedStateOf {
+          val first = listState.firstVisibleItemIndex
+          (first downTo 0).firstNotNullOfOrNull { list.getOrNull(it) as? Item.Day }?.date ?: data.today
+        }
+      }
+      val book = (heat as? Loaded.Ready)?.data
+      if (!reviewing && book != null && list.isNotEmpty()) {
+        val waiting = remember(data.unparsed) { data.unparsed.map { Format.date(it.postedAt) }.toSet() }
+        WeekStrip(book, visibleDay, waiting, Modifier.padding(start = Space.page, end = Space.page, bottom = 4.dp)) { d ->
+          val i = list.indexOfFirst { it is Item.Day && it.date == d }
+          if (i >= 0) scope.launch { listState.animateScrollToItem(i) }
+        }
+      }
       when {
         reviewing && notes.isEmpty() -> Label(if (toCheck == 0) "Nothing to check." else "Nothing here.", Modifier.padding(start = Space.page, top = 24.dp), tone = Tone.MUTED)
         reviewing -> LazyColumn(
@@ -322,18 +351,53 @@ private fun FilterStrip(filter: String, categories: List<Category>, toCheck: Int
   }
 }
 
-/** Day label and total, with a hairline bar showing how heavy the day was against the busiest one listed. */
+/** Day label, a 10-cell meter of how heavy it was against the busiest day listed, and its totals. */
 @Composable
 private fun DayHeader(day: Item.Day, max: Long) {
-  val fraction by animateFloatAsState(if (day.spent > 0) maxOf(day.spent.toFloat() / max, 0.01f) else 0f, tween(500), label = "day")
-  Column(Modifier.fillMaxWidth().background(Ember.bg).padding(start = Space.page, end = Space.page, top = 24.dp, bottom = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-      Label(day.label, Modifier.weight(1f), size = 13.sp, weight = FontWeight.Bold)
-      if (day.received > 0) Label("+${Format.digits(day.received)}", size = 13.sp, weight = FontWeight.Medium, tone = Tone.INCOME)
-      if (day.spent > 0) Label("−${Format.digits(day.spent)}", size = 13.sp, weight = FontWeight.Medium, tone = Tone.ACCENT)
-    }
-    Box(Modifier.fillMaxWidth().height(2.dp).background(Ember.line)) {
-      Box(Modifier.fillMaxWidth(fraction).height(2.dp).background(Ember.accent))
+  Row(
+    Modifier.fillMaxWidth().background(Ember.bg).padding(start = Space.page, end = Space.page, top = 22.dp, bottom = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    Label(day.label, Modifier.weight(1f), size = 14.sp, weight = FontWeight.Bold)
+    if (day.received > 0) Label("+${Format.digits(day.received)}", size = 13.sp, weight = FontWeight.Medium, tone = Tone.INCOME)
+    if (day.spent > 0) Label("−${Format.digits(day.spent)}", size = 13.sp, weight = FontWeight.Medium, tone = Tone.ACCENT)
+    CellMeter(cellsFor(day.spent.toDouble() / max, 10), 10, Ember.accent, Modifier.width(78.dp))
+  }
+}
+
+/**
+ * This week as seven heat cells with day numbers, pinned above the list. The day you're reading has a
+ * soft ink rim; a hollow ring above a day means something there waits to be checked. Tap to jump.
+ */
+@Composable
+private fun WeekStrip(book: Book, visible: LocalDate, waiting: Set<LocalDate>, modifier: Modifier = Modifier, onPick: (LocalDate) -> Unit) {
+  val monday = id.sndyy.balancenative.data.monday(visible)
+  val view = androidx.compose.ui.platform.LocalView.current
+  Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    for (i in 0 until 7) {
+      val d = monday.plusDays(i.toLong())
+      val level = book.level(d)
+      val on = d == visible
+      val rim by androidx.compose.animation.animateColorAsState(if (on) Ember.text else Ember.bg, label = "rim")
+      Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(Modifier.size(7.dp).clip(RoundedCornerShape(50)).then(if (d in waiting) Modifier.border(1.5.dp, Ember.muted, RoundedCornerShape(50)) else Modifier))
+        Box(
+          Modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .border(1.5.dp, rim, RoundedCornerShape(7.dp))
+            .padding(3.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (level >= 0) Ember.heat[level] else Ember.bg)
+            .clickable(enabled = level >= 0) { Haptic.key(view); onPick(d) },
+          contentAlignment = Alignment.Center,
+        ) {
+          if (level == -1) Box(Modifier.size(3.dp).clip(RoundedCornerShape(50)).background(Ember.selected))
+          else Label(d.dayOfMonth.toString(), size = 12.sp, weight = FontWeight.Bold, color = if (level >= 3) Ember.bg else Ember.muted)
+        }
+        Label(Format.shortDay(d).take(1), size = 10.sp, tone = if (d == book.today) Tone.TEXT else Tone.MUTED)
+      }
     }
   }
 }
