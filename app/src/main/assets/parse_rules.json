@@ -1,0 +1,157 @@
+{
+  "strip": [
+    "\\s*Need help\\?.*$",
+    "\\s*Butuh bantuan\\?.*$"
+  ],
+  "rules": [
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^{amount} has been moved from your .+ to your .+$",
+      "direction": "ignore"
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^You have paid {amount} to (.+?)(?:, (.+))?$",
+      "direction": "out",
+      "who": 2,
+      "category": 3
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^You've transferred {amount} to (.+)$",
+      "direction": "out",
+      "who": 2
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^(.+?) has sent {amount} to you$",
+      "direction": "in",
+      "amount": 2,
+      "who": 1
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^You've moved {amount} out of your .+$",
+      "direction": "ignore"
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^Kamu telah membayar {amount} ke (.+?)(?:, (.+))?$",
+      "direction": "out",
+      "who": 2,
+      "category": 3
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^Kamu telah melakukan (?:transfer|top ?up) {amount} ke (.+)$",
+      "direction": "out",
+      "who": 2
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^{amount} telah dipindahkan dari .+ ke .+$",
+      "direction": "ignore"
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^Kamu telah memindahkan {amount} (?:dari|keluar dari) .+$",
+      "direction": "ignore"
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^(.+?) telah mengirim(?:kan)? {amount} (?:ke|kepada|untuk) (?:kamu|Anda)$",
+      "direction": "in",
+      "amount": 2,
+      "who": 1
+    },
+    {
+      "packages": [
+        "com.jago.digitalBanking"
+      ],
+      "pattern": "^Kamu telah menerima {amount} dari (.+)$",
+      "direction": "in",
+      "who": 2
+    },
+    {
+      "packages": [
+        "com.bca.mybca.omni.android",
+        "com.bca"
+      ],
+      "pattern": "^(?:Financial Diary: )?You spent {amount} at (.+)$",
+      "direction": "out",
+      "category": 2
+    },
+    {
+      "packages": [
+        "com.bca.mybca.omni.android",
+        "com.bca"
+      ],
+      "pattern": "^(?:Financial Diary: )?You received {amount} from (.+) at (.+?) category$",
+      "direction": "in",
+      "who": 2,
+      "category": 3
+    },
+    {
+      "packages": [
+        "com.bca.mybca.omni.android",
+        "com.bca"
+      ],
+      "pattern": "^(?:Financial Diary: )?You received {amount} at (.+?) category$",
+      "direction": "in",
+      "category": 2
+    },
+    {
+      "packages": [
+        "com.bca.mybca.omni.android",
+        "com.bca"
+      ],
+      "pattern": "^(?:Financial Diary: )?Pengeluaran sebesar {amount} di kategori (.+)$",
+      "direction": "out",
+      "category": 2
+    },
+    {
+      "packages": [
+        "com.bca.mybca.omni.android",
+        "com.bca"
+      ],
+      "pattern": "^(?:Financial Diary: )?Pemasukan sebesar {amount} dari (.+) di kategori (.+)$",
+      "direction": "in",
+      "who": 2,
+      "category": 3
+    },
+    {
+      "packages": [
+        "com.bca.mybca.omni.android",
+        "com.bca"
+      ],
+      "pattern": "^(?:Financial Diary: )?Pemasukan sebesar {amount} di kategori (.+)$",
+      "direction": "in",
+      "category": 2
+    }
+  ],
+  "generic": {
+    "promo": "\\b(cashback|promo|voucher|diskon|discount|menangkan|hadiah|reward|poin|points)\\b",
+    "out": "\\b(paid|spent|transferred|payment|pembayaran|bayar|membayar|pengeluaran|transfer ke|melakukan transfer|top ?up|isi saldo|tarik tunai|penarikan|debit|keluar)\\b",
+    "in": "\\b(received|sent .* to you|diterima|masuk|menerima|pemasukan|mengirim(?:kan)? .* (?:ke|kepada) (?:kamu|anda)|kredit|credit)\\b"
+  }
+}

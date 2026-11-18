@@ -61,7 +61,7 @@ internal object Parsers {
     cached = json to set
   }
 
-  private fun compile(json: String): RuleSet {
+  internal fun compile(json: String): RuleSet {
     val root = JSONObject(json)
     fun regex(pattern: String) = Regex(pattern.replace("{amount}", AMOUNT), RegexOption.IGNORE_CASE)
     fun optRegex(obj: JSONObject?, key: String) = obj?.optString(key)?.takeIf { it.isNotEmpty() }?.let(::regex)

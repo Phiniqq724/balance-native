@@ -15,9 +15,7 @@ fun localString(key: String) = "\"${local.getProperty(key, "")}\""
 android {
     namespace = "id.sndyy.balancenative"
     compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
+        version = release(37)
     }
 
     defaultConfig {
@@ -85,6 +83,8 @@ dependencies {
     implementation(libs.ktor.client.okhttp)
     implementation(libs.kotlinx.serialization.json)
     testImplementation(libs.junit)
+    // Android's org.json is a stub on the JVM; the parser tests need the real one.
+    testImplementation(libs.org.json)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)
