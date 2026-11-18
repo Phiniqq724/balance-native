@@ -249,7 +249,13 @@ fun AtlasGrid(
           }
         }
         val end = layout.end(col, row)!!
-        if (!book.today.isBefore(d) && !book.today.isAfter(end)) drawRect(Ember.muted, at + Offset(c * 0.2f, c + min(g * 0.5f, 1.2.dp.toPx()) - 0.75.dp.toPx()), Size(c * 0.6f, 1.5.dp.toPx()))
+        // Today is a solid dot inside its cell: the bright end of the faint dots that mark the days
+        // still to come. Ink on dark cells, charcoal on hot ones, so it reads on every heat step.
+        if (!book.today.isBefore(d) && !book.today.isAfter(end)) {
+          val dot = (c * 0.14f).coerceIn(1.6.dp.toPx(), 2.6.dp.toPx())
+          val centre = if (view == AtlasView.DAYS) at + Offset(c - 7.dp.toPx(), c - 7.dp.toPx()) else at + Offset(c / 2, c / 2)
+          drawCircle(if (level >= 3) Ember.bg else Ember.text, radius = dot, center = centre)
+        }
         if (cursor != null && d == cursor && view != AtlasView.YEAR) drawRoundRect(Ember.text, at, Size(c, c), radius)
       }
 
