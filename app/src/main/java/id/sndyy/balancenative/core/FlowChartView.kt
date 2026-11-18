@@ -63,7 +63,8 @@ private fun parse(hex: String): Color = Color(android.graphics.Color.parseColor(
 
 /** Scrubbable chart drawn on a Canvas: @expo/ui has no chart components. */
 @Composable
-fun FlowChart(props: FlowChartProps, modifier: Modifier = Modifier) {
+fun FlowChart(props: FlowChartProps, modifier: Modifier = Modifier, onScrub: (Int?) -> Unit = {}) {
+  val scrub by androidx.compose.runtime.rememberUpdatedState(onScrub)
   val context = LocalContext.current
   val view = LocalView.current
   val measurer = rememberTextMeasurer()
@@ -91,6 +92,7 @@ fun FlowChart(props: FlowChartProps, modifier: Modifier = Modifier) {
           val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
           down.consume()
           touched = indexAt(down.position.x)
+          scrub(touched)
           view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
           while (true) {
             val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -103,9 +105,11 @@ fun FlowChart(props: FlowChartProps, modifier: Modifier = Modifier) {
             val next = indexAt(change.position.x)
             // A light tick per slot, so scrubbing feels like a dial.
             if (next != touched) view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+            if (next != touched) scrub(next)
             touched = next
           }
           touched = null
+          scrub(null)
         }
       }
   ) {

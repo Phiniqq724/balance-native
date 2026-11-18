@@ -61,7 +61,10 @@ import id.sndyy.balancenative.ui.activity.ActivityViewModel
 import id.sndyy.balancenative.ui.activity.NewTxSheet
 import id.sndyy.balancenative.ui.kit.Label
 import id.sndyy.balancenative.ui.kit.ledgerTicks
-import id.sndyy.balancenative.ui.kit.rememberPressScale
+import id.sndyy.balancenative.ui.kit.CellButton
+import id.sndyy.balancenative.ui.kit.SqueezeRow
+import id.sndyy.balancenative.ui.kit.cellShape
+import androidx.compose.foundation.layout.width
 import id.sndyy.balancenative.ui.overview.OverviewScreen
 import id.sndyy.balancenative.ui.profile.ProfileScreen
 import id.sndyy.balancenative.ui.theme.Ember
@@ -120,65 +123,51 @@ fun MainScreen(landing: MutableStateFlow<Landing?>) {
   if (adding) NewTxSheet(onClose = { adding = false })
 }
 
+/**
+ * Compact floating nav, Tessera-style: three cell keys that share the bar by weight. The active one is
+ * ink and wide enough for its label; a press swells the key and squeezes its neighbours. The add key
+ * rides beside it on Activity only, neutral with an ink "+": orange stays for spending.
+ */
 @Composable
 private fun FloatingBar(selected: Int, toCheck: Int, showAdd: Boolean, onSelect: (Int) -> Unit, onAdd: () -> Unit, modifier: Modifier) {
-  val view = LocalView.current
   Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-    Surface(color = Ember.raised, shape = RoundedCornerShape(28.dp), shadowElevation = 8.dp) {
-      Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        TABS.forEachIndexed { i, tab ->
-          val focused = i == selected
-          val bg by animateColorAsState(if (focused) Ember.selected else Ember.raised, label = "tabBg")
-          val tint by animateColorAsState(if (focused) Ember.text else Ember.muted, label = "tabTint")
-          val source = remember { MutableInteractionSource() }
-          val scale = rememberPressScale(source, 0.92f)
-          Row(
-            Modifier
-              .graphicsLayer { scaleX = scale; scaleY = scale }
-              .clip(RoundedCornerShape(22.dp))
-              .background(bg)
-              .clickable(interactionSource = source, indication = null) {
-                if (!focused) {
-                  view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
-                  onSelect(i)
-                }
-              }
-              .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
+    Surface(color = Ember.raised, shape = cellShape(56.dp), shadowElevation = 8.dp) {
+      SqueezeRow(
+        count = TABS.size,
+        modifier = Modifier.width(236.dp).padding(6.dp),
+        spacing = 4.dp,
+        chosen = selected,
+        chosenExtra = 0.9f,
+      ) { i, source, weight ->
+        val tab = TABS[i]
+        val on = i == selected
+        CellButton(on = on, onClick = { if (!on) onSelect(i) }, modifier = weight, source = source, height = 44.dp, face = Ember.raised, description = tab.label) { fg ->
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             if (i == 1 && toCheck > 0) {
-              BadgedBox(badge = { Badge(containerColor = Ember.accent, contentColor = Ember.bg) { Label(if (toCheck > 99) "99+" else "$toCheck", size = 10.sp, weight = FontWeight.Bold, color = Ember.bg) } }) {
-                Icon(tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
-              }
+              BadgedBox(badge = {
+                Badge(containerColor = if (on) Ember.bg else Ember.text, contentColor = if (on) Ember.text else Ember.bg) {
+                  Label(if (toCheck > 99) "99+" else "$toCheck", size = 10.sp, weight = FontWeight.Bold, color = if (on) Ember.text else Ember.bg)
+                }
+              }) { Icon(tab.icon, tab.label, tint = fg, modifier = Modifier.size(22.dp)) }
             } else {
-              Icon(tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
+              Icon(tab.icon, tab.label, tint = fg, modifier = Modifier.size(22.dp))
             }
-            AnimatedVisibility(focused, enter = fadeIn() + expandHorizontally(spring(dampingRatio = Spring.DampingRatioLowBouncy)), exit = fadeOut() + shrinkHorizontally()) {
-              Label(tab.label, size = 14.sp, weight = FontWeight.Bold, color = tint, maxLines = 1)
+            AnimatedVisibility(on, enter = fadeIn() + expandHorizontally(spring(dampingRatio = Spring.DampingRatioLowBouncy)), exit = fadeOut() + shrinkHorizontally()) {
+              Label(tab.label, size = 14.sp, weight = FontWeight.Bold, color = fg, maxLines = 1)
             }
           }
         }
       }
     }
     AnimatedVisibility(showAdd, enter = scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy)) + fadeIn(), exit = scaleOut() + fadeOut()) {
-      val source = remember { MutableInteractionSource() }
-      val scale = rememberPressScale(source, 0.9f)
-      Box(
-        Modifier
-          .graphicsLayer { scaleX = scale; scaleY = scale }
-          .shadow(8.dp, CircleShape)
-          .size(56.dp)
-          .clip(RoundedCornerShape(18.dp))
-          .background(Ember.accent)
-          .clickable(interactionSource = source, indication = null) {
-            view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            onAdd()
-          },
-        contentAlignment = Alignment.Center,
-      ) {
-        Icon(Icons.Rounded.Add, "New transaction", tint = Ember.bg, modifier = Modifier.size(26.dp))
-      }
+      CellButton(
+        on = false,
+        onClick = onAdd,
+        modifier = Modifier.size(56.dp).shadow(8.dp, cellShape(56.dp)),
+        height = 56.dp,
+        face = Ember.raised,
+        description = "New transaction",
+      ) { Icon(Icons.Rounded.Add, "New transaction", tint = Ember.text, modifier = Modifier.size(26.dp)) }
     }
   }
 }

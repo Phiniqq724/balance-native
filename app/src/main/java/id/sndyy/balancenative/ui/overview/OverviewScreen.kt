@@ -1,26 +1,19 @@
 package id.sndyy.balancenative.ui.overview
 
 import android.app.Application
+import android.content.Context
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateDpAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -32,33 +25,23 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
@@ -67,347 +50,390 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import id.sndyy.balancenative.balance
 import id.sndyy.balancenative.core.FlowChart
 import id.sndyy.balancenative.core.FlowChartProps
-import id.sndyy.balancenative.core.SyncWorker
-import id.sndyy.balancenative.data.Analysis
-import id.sndyy.balancenative.data.Analytics
+import id.sndyy.balancenative.data.AtlasView
+import id.sndyy.balancenative.data.Book
+import id.sndyy.balancenative.data.Direction
 import id.sndyy.balancenative.data.Format
-import id.sndyy.balancenative.data.HeatCell
-import id.sndyy.balancenative.data.Heatmap
-import id.sndyy.balancenative.data.Period
+import id.sndyy.balancenative.data.Preset
+import id.sndyy.balancenative.data.RangeStats
+import id.sndyy.balancenative.data.Selection
 import id.sndyy.balancenative.data.Share
+import id.sndyy.balancenative.data.Span
+import id.sndyy.balancenative.data.monday
+import id.sndyy.balancenative.data.viewFor
+import id.sndyy.balancenative.ui.kit.CellButton
 import id.sndyy.balancenative.ui.kit.Failed
+import id.sndyy.balancenative.ui.kit.Haptic
 import id.sndyy.balancenative.ui.kit.Label
 import id.sndyy.balancenative.ui.kit.Loaded
 import id.sndyy.balancenative.ui.kit.Loading
 import id.sndyy.balancenative.ui.kit.Money
 import id.sndyy.balancenative.ui.kit.Rule
 import id.sndyy.balancenative.ui.kit.SectionHead
+import id.sndyy.balancenative.ui.kit.SqueezeRow
 import id.sndyy.balancenative.ui.kit.SyncRefresh
 import id.sndyy.balancenative.ui.kit.Tone
 import id.sndyy.balancenative.ui.kit.UiEvents
 import id.sndyy.balancenative.ui.kit.ledgerState
-import id.sndyy.balancenative.ui.kit.shade
 import id.sndyy.balancenative.ui.theme.Ember
 import id.sndyy.balancenative.ui.theme.Space
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.drawText
-import androidx.compose.ui.text.rememberTextMeasurer
-import id.sndyy.balancenative.ui.theme.Satoshi
-import kotlinx.coroutines.launch
 import java.time.LocalDate
-import java.time.LocalDateTime
 import kotlin.math.abs
-import kotlin.math.min
 import kotlin.math.roundToInt
 
-private const val WEEKS = 20
-
 data class OverviewData(
-  val now: LocalDateTime,
+  val book: Book,
   val empty: Boolean,
-  /** Every period worked out up front, so switching is instant and nothing heavy runs while drawing. */
-  val analyses: Map<Period, Analysis>,
-  val grid: List<List<HeatCell>>,
   val hasAccess: Boolean,
+  val toCheck: Int,
+  /** What the AI read the waiting notifications as spending, when it could tell. */
+  val toCheckAmount: Long,
 )
 
 class OverviewViewModel(app: Application) : AndroidViewModel(app) {
   private val core = app.balance.core
+  private val prefs = app.getSharedPreferences("balance.ui", Context.MODE_PRIVATE)
 
   val state = viewModelScope.ledgerState {
-    val now = LocalDateTime.now()
-    val since = min(Analytics.start(now), Format.startOfDayMs(Heatmap.start(WEEKS, now.toLocalDate())))
-    val flows = core.flows(since)
+    val today = LocalDate.now()
+    val first = Book.firstDay(today)
+    val flows = core.flows(Format.startOfDayMs(first))
+    val waiting = runCatching { core.unparsed() }.getOrDefault(emptyList())
     withContext(Dispatchers.Default) {
       OverviewData(
-        now = now,
+        book = Book(first, today, flows),
         empty = flows.isEmpty(),
-        analyses = Period.entries.associateWith { Analytics.analyze(flows, it, now) },
-        grid = Heatmap.build(flows, WEEKS, now.toLocalDate()),
         hasAccess = core.hasNotificationAccess(),
+        toCheck = waiting.size,
+        toCheckAmount = waiting.sumOf { w -> w.review?.takeIf { it.direction == Direction.OUT }?.amount ?: 0L },
       )
     }
   }
+
+  // Lives with the ViewModel: survives rotation, resets to This month when the app restarts.
+  var selection by mutableStateOf<Selection?>(null)
+    private set
+  var view by mutableStateOf(AtlasView.WEEKS)
+    private set
+  /** Last column's Monday while drilled into 8 weeks. */
+  var daysEnd by mutableStateOf<LocalDate?>(null)
+    private set
+  /** True while a finger is dragging a range: totals snap instead of counting up. */
+  var dragging by mutableStateOf(false)
+    private set
+  var hint by mutableStateOf(false)
+    private set
+
+  fun current(book: Book): Selection = selection ?: book.preset(Preset.MONTH)
+
+  private fun select(book: Book, sel: Selection) {
+    selection = sel
+    view = viewFor(sel, view)
+    if (view == AtlasView.DAYS) {
+      val end = daysEnd ?: monday(book.today)
+      if (monday(sel.start).isBefore(end.minusWeeks(7)) || monday(sel.end).isAfter(end)) daysEnd = centred(book, sel)
+    }
+  }
+
+  private fun centred(book: Book, sel: Selection): LocalDate {
+    val mid = sel.start.plusDays(sel.days / 2L)
+    return minOf(monday(book.today), monday(mid).plusWeeks(3))
+  }
+
+  fun lastWeek(book: Book): LocalDate {
+    val now = monday(book.today)
+    return when (view) {
+      AtlasView.YEAR -> now
+      AtlasView.DAYS -> daysEnd ?: now
+      AtlasView.WEEKS -> {
+        val start = monday(current(book).start)
+        if (start.isBefore(now.minusWeeks(19))) start.plusWeeks(19) else now
+      }
+    }
+  }
+
+  fun tap(book: Book, d: LocalDate) {
+    if (d.isAfter(book.today)) return
+    dragging = false
+    select(book, when (view) {
+      AtlasView.WEEKS -> book.week(d)
+      AtlasView.DAYS -> book.day(d)
+      AtlasView.YEAR -> book.month(d)
+    })
+  }
+
+  fun drag(book: Book, from: LocalDate, to: LocalDate, done: Boolean) {
+    if (minOf(from, to).isAfter(book.today)) return
+    dragging = !done
+    select(book, if (view == AtlasView.YEAR) book.months(from, to) else book.range(from, to))
+  }
+
+  fun preset(book: Book, p: Preset) { dragging = false; select(book, book.preset(p)) }
+
+  fun canStep(book: Book, dir: Int) = book.step(current(book), dir) != null
+
+  fun step(book: Book, dir: Int): Boolean {
+    val next = book.step(current(book), dir) ?: return false
+    dragging = false
+    select(book, next)
+    return true
+  }
+
+  fun drill(book: Book) { daysEnd = centred(book, current(book)); view = AtlasView.DAYS }
+
+  fun weeks() { view = AtlasView.WEEKS }
+
+  fun reset() { selection = null; view = AtlasView.WEEKS; dragging = false }
+
+  /** "Hold and drag to pick days" shows once, the first time a touch rests on the grid. */
+  fun held() {
+    if (prefs.getBoolean("atlas_hint", false)) return
+    prefs.edit().putBoolean("atlas_hint", true).apply()
+    hint = true
+  }
+
+  fun hintDone() { hint = false }
 
   fun openAccess() = core.openNotificationAccessSettings()
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OverviewScreen(onCategory: (String) -> Unit, vm: OverviewViewModel = viewModel()) {
   val state by vm.state.collectAsState()
-  var period by rememberSaveable { mutableStateOf(Period.MONTH) }
-
   when (val s = state) {
     Loaded.Loading -> Loading()
     is Loaded.Error -> Failed("Couldn't read your ledger.") { UiEvents.retry() }
-    is Loaded.Ready -> SyncRefresh {
-      Overview(s.data, period, { period = it }, vm::openAccess, onCategory)
-    }
+    is Loaded.Ready -> SyncRefresh { Overview(s.data, vm, onCategory) }
   }
 }
 
 @Composable
-private fun Overview(data: OverviewData, period: Period, onPeriod: (Period) -> Unit, onAllowAccess: () -> Unit, onCategory: (String) -> Unit) {
-  val a = data.analyses.getValue(period)
-  val empty = data.empty
+private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (String) -> Unit) {
+  val book = data.book
+  val sel = vm.current(book)
+  val stats = remember(book, sel) { book.stats(sel) }
+  var cursor by remember { mutableStateOf<LocalDate?>(null) }
+  var highlight by remember(sel) { mutableStateOf<String?>(null) }
+
+  if (vm.hint) androidx.compose.runtime.LaunchedEffect(Unit) { kotlinx.coroutines.delay(2600); vm.hintDone() }
 
   Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding()) {
     AnimatedVisibility(!data.hasAccess, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
-      AccessBanner(onAllowAccess)
+      AccessBanner(vm::openAccess)
     }
 
-    PeriodTicker(period, onPeriod, rangeLabel(a))
+    AtlasGrid(
+      book = book,
+      selection = sel,
+      view = vm.view,
+      lastWeek = vm.lastWeek(book),
+      cursor = cursor,
+      onTap = { vm.tap(book, it) },
+      onDrag = { a, b, done -> vm.drag(book, a, b, done) },
+      onHold = vm::held,
+      modifier = Modifier.padding(start = Space.page, end = Space.page, top = 20.dp),
+    )
 
-    // The headline slides in from the side the new period sits on, so switching reads as moving along a ruler.
-    AnimatedContent(
-      targetState = period,
-      transitionSpec = {
-        val forward = targetState.ordinal > initialState.ordinal
-        (slideInHorizontally(tween(260)) { if (forward) it / 6 else -it / 6 } + fadeIn(tween(260))) togetherWith
-          (slideOutHorizontally(tween(200)) { if (forward) -it / 6 else it / 6 } + fadeOut(tween(160)))
-      },
-      label = "headline",
-    ) { p ->
-      val pa = data.analyses.getValue(p)
-      Column(Modifier.padding(start = Space.page, end = Space.page, top = 28.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Label("Spent", size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
-        Money(pa.spent)
-        Pace(pa.paceDelta, p.compare)
-      }
+    Caption(stats, vm, book)
+
+    Presets(sel.preset, onPick = { vm.preset(book, it) })
+
+    Column(Modifier.padding(start = Space.page, end = Space.page, top = 20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      Label("Spent", size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
+      Money(stats.spent, size = totalSize(stats.spent), animate = !vm.dragging)
+      Status(data) { onCategory("review") }
     }
 
-    if (empty) {
+    if (data.empty) {
       Label(
-        "Nothing logged yet. Pay with Jago or myBCA and it shows up here.",
-        Modifier.padding(start = Space.page, end = Space.page, top = 28.dp),
+        "Nothing logged yet. Pay with Jago or myBCA and it lands here.",
+        Modifier.padding(start = Space.page, end = Space.page, top = 24.dp),
         size = 15.sp,
         tone = Tone.MUTED,
       )
     } else {
-      FlowChart(
-        FlowChartProps(
-          mode = "line",
-          current = a.line.current.map(Long::toDouble),
-          previous = if (a.hasPrevious) a.line.previous.map(Long::toDouble) else emptyList(),
-          ticks = a.line.ticks,
-          readoutLabels = a.line.readoutLabels,
-          readoutValues = a.line.readoutValues,
-          defaultIndex = a.nowIndex,
-          textColor = Ember.HEX_TEXT, mutedColor = Ember.HEX_MUTED, gridColor = Ember.HEX_LINE, accentColor = Ember.HEX_ACCENT,
-        ),
-        Modifier.fillMaxWidth().height(248.dp).padding(start = Space.page, end = Space.page, top = 24.dp),
-      )
-      Row(Modifier.padding(start = Space.page, end = Space.page, top = 4.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        LegendKey(period.current)
-        if (a.hasPrevious) LegendKey(period.previous, dashed = true)
+      ChartSlot(book, stats) { i -> cursor = i?.let { stats.chartDays.getOrNull(it) }?.takeIf { sel.days <= 70 } }
+
+      SectionHead("In and out")
+      Column(Modifier.padding(horizontal = Space.page), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        InOutRow(stats.received, stats.spent)
+        val net = stats.received - stats.spent
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+          Label("In ${Format.digits(stats.received)}", size = 13.sp, tone = Tone.MUTED)
+          Label("Out ${Format.digits(stats.spent)}", size = 13.sp, tone = Tone.MUTED)
+          Spacer(Modifier.weight(1f))
+          Label("Net ${if (net >= 0) "+" else "−"}Rp ${Format.digits(net)}", size = 14.sp, weight = FontWeight.Bold)
+        }
       }
 
-      SpendGrid(data.grid)
-      FlowSplit(a.spent, a.received)
-      if (a.categories.isNotEmpty()) WhereItWent(a.categories, a.stats.payments, onCategory)
-      if (a.sources.isNotEmpty()) WhereItCameFrom(a.sources)
-
-      SectionHead(period.unit)
-      FlowChart(
-        FlowChartProps(
-          mode = "bars",
-          current = a.line.current.let { cur -> a.slots.indices.map { i -> cur.getOrNull(i)?.toDouble() ?: 0.0 } },
-          income = a.incomeSlots.map(Long::toDouble),
-          ticks = a.line.ticks,
-          readoutLabels = a.slots.map { it.name },
-          readoutValues = a.slots.indices.map { i ->
-            val out = a.line.current.getOrNull(i) ?: 0L
-            val inc = a.incomeSlots.getOrNull(i) ?: 0L
-            listOfNotNull(out.takeIf { it > 0 }?.let { "−${Format.digits(it)}" }, inc.takeIf { it > 0 }?.let { "+${Format.digits(it)}" })
-              .joinToString("  ").ifEmpty { "0" }
-          },
-          defaultIndex = a.nowIndex,
-          textColor = Ember.HEX_TEXT, mutedColor = Ember.HEX_MUTED, gridColor = Ember.HEX_LINE, accentColor = Ember.HEX_ACCENT, incomeColor = Ember.HEX_INCOME,
-        ),
-        Modifier.fillMaxWidth().height(184.dp).padding(horizontal = Space.page),
-      )
-      Row(Modifier.padding(start = Space.page, end = Space.page, top = 4.dp), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-        LegendKey("Spent", tint = Ember.accent)
-        LegendKey("Received", tint = Ember.income)
+      if (stats.categories.isNotEmpty()) {
+        SectionHead("Where it went", if (stats.payments == 1) "1 payment" else "${stats.payments} payments")
+        Column(Modifier.padding(horizontal = Space.page)) {
+          ShareField(stats.categories, highlight)
+          Spacer(Modifier.height(8.dp))
+          RankedRows(stats.categories, highlight, { highlight = it }) { onCategory("cat:${it.id ?: "none"}") }
+        }
       }
 
-      StatPlate(a)
+      if (stats.sources.isNotEmpty()) {
+        SectionHead("Where it came from")
+        Column(Modifier.padding(horizontal = Space.page)) {
+          stats.sources.take(5).forEach { SourceRow(it) }
+        }
+      }
+
+      StatPlate(stats)
     }
     Spacer(Modifier.height(Space.navClearance))
   }
 }
 
-private fun rangeLabel(a: Analysis): String {
-  val first = Format.date(a.slots.first().start)
-  val last = Format.date(a.slots.last().end - 1)
-  if (a.slots.size == 12) return first.year.toString()
-  fun s(d: LocalDate) = "${d.dayOfMonth} ${Format.shortMonth(d)}"
-  return "${s(first)} – ${s(last)}"
+/** Display size from the digit count, never measured, so it can't jitter mid-drag. */
+private fun totalSize(value: Long) = when (abs(value).toString().length) {
+  in 0..7 -> 52.sp
+  8 -> 46.sp
+  else -> 40.sp
 }
 
-/** Text tabs, no pills: the selected period is bright, and the underline glides to it. */
+/**
+ * Two fixed lines under the grid: ‹ range › then the comparison with the drill and reset links.
+ * A horizontal swipe on this band steps the period; the rest of the page still swipes tabs.
+ */
 @Composable
-private fun PeriodTicker(period: Period, onChange: (Period) -> Unit, range: String) {
-  Row(Modifier.fillMaxWidth().padding(start = Space.page - 8.dp, end = Space.page, top = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-    Period.entries.forEach { p ->
-      val on = p == period
-      val bar by animateDpAsState(if (on) 16.dp else 0.dp, spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "tick")
-      Column(
-        Modifier.clip(RoundedCornerShape(8.dp)).clickable { onChange(p) }.padding(start = 8.dp, end = 8.dp, top = 8.dp, bottom = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-      ) {
-        Label(p.label, size = 15.sp, weight = if (on) FontWeight.Bold else FontWeight.Medium, tone = if (on) Tone.TEXT else Tone.MUTED)
-        Spacer(Modifier.height(4.dp))
-        Box(Modifier.size(bar, 2.dp).background(Ember.text))
-      }
+private fun Caption(stats: RangeStats, vm: OverviewViewModel, book: Book) {
+  val view = LocalView.current
+  val sel = stats.selection
+  val threshold = with(LocalDensity.current) { 40.dp.toPx() }
+  fun step(dir: Int) { if (vm.step(book, dir)) Haptic.confirm(view) }
+  Column(
+    Modifier
+      .fillMaxWidth()
+      .padding(start = Space.page - 8.dp, end = Space.page, top = 10.dp)
+      .pointerInput(book) {
+        var dx = 0f
+        detectHorizontalDragGestures(
+          onDragStart = { dx = 0f },
+          onDragEnd = { if (abs(dx) > threshold) step(if (dx > 0) -1 else 1) },
+        ) { change, amount -> change.consume(); dx += amount }
+      },
+  ) {
+    Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
+      Stepper("‹", "Previous period", vm.canStep(book, -1)) { step(-1) }
+      AnimatedContent(
+        targetState = "${if (sel.days == 1) "1 day" else "${sel.days} days"} · ${selectionLabel(sel)}",
+        transitionSpec = { fadeIn(androidx.compose.animation.core.tween(120)) togetherWith fadeOut(androidx.compose.animation.core.tween(90)) },
+        modifier = Modifier.weight(1f),
+        label = "range",
+      ) { Label(it, Modifier.fillMaxWidth(), size = 15.sp, weight = FontWeight.Bold, maxLines = 1) }
+      Stepper("›", "Next period", vm.canStep(book, 1)) { step(1) }
     }
-    Spacer(Modifier.weight(1f))
-    Label(range, size = 13.sp, tone = Tone.MUTED)
+    Row(Modifier.fillMaxWidth().height(22.dp).padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+      Label(if (vm.hint) "Hold and drag to pick days" else compare(stats), Modifier.weight(1f), size = 13.sp, tone = Tone.MUTED, maxLines = 1)
+      val link = when {
+        vm.view == AtlasView.DAYS -> "‹ Weeks"
+        vm.view == AtlasView.WEEKS && sel.span == Span.WEEK && sel.preset == null -> "Days ›"
+        else -> null
+      }
+      if (link != null) Label(link, Modifier.clickable { Haptic.key(view); if (vm.view == AtlasView.DAYS) vm.weeks() else vm.drill(book) }, size = 13.sp, weight = FontWeight.Bold)
+      val isDefault = sel.preset == Preset.MONTH && vm.view == AtlasView.WEEKS
+      if (!isDefault) Label("×", Modifier.width(20.dp).clickable { Haptic.key(view); vm.reset() }.semantics { contentDescription = "Back to this month" }, size = 16.sp, tone = Tone.MUTED)
+    }
+  }
+}
+
+private fun compare(stats: RangeStats): String {
+  val pace = stats.pace ?: return "Nothing earlier to compare"
+  val pct = (abs(pace) * 100).roundToInt()
+  return if (pct == 0) "Level with ${stats.baseLabel}" else "$pct% ${if (pace < 0) "under" else "over"} ${stats.baseLabel}"
+}
+
+@Composable
+private fun Stepper(glyph: String, description: String, enabled: Boolean, onClick: () -> Unit) {
+  Box(
+    Modifier.size(36.dp).clickable(enabled = enabled, onClick = onClick).semantics { contentDescription = description },
+    contentAlignment = Alignment.Center,
+  ) { Label(glyph, size = 20.sp, color = if (enabled) Ember.muted else Ember.line) }
+}
+
+/** W M Q Y as one squeeze row of cell controls, cut to the grid's columns (5 each). */
+@Composable
+private fun Presets(active: Preset?, onPick: (Preset) -> Unit) {
+  SqueezeRow(
+    count = Preset.entries.size,
+    modifier = Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 12.dp),
+    chosen = active?.ordinal ?: -1,
+  ) { i, source, weight ->
+    val p = Preset.entries[i]
+    CellButton(on = p == active, onClick = { onPick(p) }, modifier = weight, source = source) { fg ->
+      Label(p.label, size = 13.sp, weight = FontWeight.Bold, color = fg, maxLines = 1)
+    }
   }
 }
 
 @Composable
-private fun Pace(delta: Double?, compare: String) {
-  if (delta == null) {
-    Label("Nothing from ${compare.replace(" so far", "")} to compare", size = 14.sp, tone = Tone.MUTED)
+private fun Status(data: OverviewData, onOpen: () -> Unit) {
+  val text = when {
+    data.toCheck == 0 -> ""
+    data.toCheckAmount > 0 -> "+${Format.rupiah(data.toCheckAmount)} to check"
+    data.toCheck == 1 -> "1 to check"
+    else -> "${data.toCheck} to check"
+  }
+  Box(Modifier.height(20.dp), contentAlignment = Alignment.CenterStart) {
+    if (text.isNotEmpty()) Label(text, Modifier.clickable(onClick = onOpen), size = 13.sp, tone = Tone.MUTED)
+  }
+}
+
+/** The chart, or for a single day that day's payments, in the same fixed height so nothing jumps. */
+@Composable
+private fun ChartSlot(book: Book, stats: RangeStats, onScrub: (Int?) -> Unit) {
+  val height = 220.dp
+  if (stats.selection.days == 1) {
+    val flows = book.flowsOn(stats.selection.start).filter { it.direction == Direction.OUT }
+    Column(Modifier.fillMaxWidth().height(height).padding(start = Space.page, end = Space.page, top = 24.dp)) {
+      if (flows.isEmpty()) Label("No spending this day.", size = 14.sp, tone = Tone.MUTED)
+      flows.take(4).forEach {
+        Row(Modifier.fillMaxWidth().padding(vertical = 9.dp)) {
+          Label(it.title, Modifier.weight(1f), size = 14.sp, maxLines = 1)
+          Label("−${Format.digits(it.amount)}", size = 14.sp, weight = FontWeight.Medium)
+        }
+        Rule()
+      }
+      if (flows.size > 4) Label("+${flows.size - 4} more", Modifier.padding(top = 8.dp), size = 12.sp, tone = Tone.MUTED)
+    }
     return
   }
-  val pct = (abs(delta) * 100).roundToInt()
-  if (pct == 0) {
-    Label("Level with $compare", size = 14.sp, tone = Tone.MUTED)
-    return
-  }
-  androidx.compose.material3.Text(
-    buildAnnotatedString {
-      withStyle(SpanStyle(color = Ember.text, fontWeight = FontWeight.Bold)) { append("${if (delta > 0) "▲" else "▼"} $pct%") }
-      append(" ${if (delta > 0) "over" else "under"} $compare")
-    },
-    color = Ember.muted,
-    fontFamily = id.sndyy.balancenative.ui.theme.Satoshi,
-    fontSize = 14.sp,
+  val a = stats.chart
+  FlowChart(
+    FlowChartProps(
+      mode = "line",
+      current = a.current.map(Long::toDouble),
+      previous = a.previous.map(Long::toDouble),
+      ticks = a.ticks,
+      readoutLabels = a.readoutLabels,
+      readoutValues = a.readoutValues,
+      defaultIndex = a.current.size - 1,
+      textColor = Ember.HEX_TEXT, mutedColor = Ember.HEX_MUTED, gridColor = Ember.HEX_LINE, accentColor = Ember.HEX_ACCENT,
+    ),
+    Modifier.fillMaxWidth().height(height).padding(start = Space.page, end = Space.page, top = 20.dp),
+    onScrub = onScrub,
   )
 }
 
 @Composable
-private fun LegendKey(label: String, dashed: Boolean = false, tint: Color = Ember.text) {
-  Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-    if (dashed) {
-      Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) { repeat(3) { Box(Modifier.size(3.dp, 2.dp).background(Ember.muted)) } }
-    } else {
-      Box(Modifier.size(11.dp, 2.dp).background(tint))
-    }
-    Label(label, size = 12.sp, tone = Tone.MUTED)
-  }
-}
-
-/** Same grid as the home-screen widget, Monday on top. One Canvas, so 140 days cost one draw. */
-@Composable
-private fun SpendGrid(columns: List<List<HeatCell>>) {
-  SectionHead("Last $WEEKS weeks")
-  val measurer = rememberTextMeasurer()
-  val dayStyle = TextStyle(fontFamily = Satoshi, fontWeight = FontWeight.Medium, fontSize = 10.sp, color = Ember.muted)
-  BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = Space.page)) {
-    val gap = 3.dp
-    val labelWidth = 18.dp
-    val cell = (maxWidth - labelWidth - gap * (columns.size - 1)) / columns.size
-    Canvas(Modifier.fillMaxWidth().height(cell * 7 + gap * 6)) {
-      val c = cell.toPx()
-      val g = gap.toPx()
-      val left = labelWidth.toPx()
-      val r = CornerRadius(3.dp.toPx())
-      listOf(0 to "M", 2 to "W", 4 to "F", 6 to "S").forEach { (row, d) ->
-        val layout = measurer.measure(d, dayStyle)
-        drawText(layout, topLeft = Offset(0f, row * (c + g) + (c - layout.size.height) / 2))
-      }
-      columns.forEachIndexed { w, week ->
-        week.forEachIndexed { d, day ->
-          if (day.level >= 0) drawRoundRect(Ember.heat[day.level], Offset(left + w * (c + g), d * (c + g)), Size(c, c), r)
-        }
-      }
-    }
-  }
-  Row(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-    Spacer(Modifier.weight(1f))
-    Label("Less", size = 12.sp, tone = Tone.MUTED)
-    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) { Ember.heat.forEach { Box(Modifier.size(10.dp).clip(RoundedCornerShape(2.dp)).background(it)) } }
-    Label("More", size = 12.sp, tone = Tone.MUTED)
-  }
-}
-
-@Composable
-private fun FlowSplit(spent: Long, received: Long) {
-  val net = received - spent
-  SectionHead("In and out")
-  Row(Modifier.fillMaxWidth().padding(horizontal = Space.page)) {
-    Figure("In", "+${Format.digits(received)}", Tone.INCOME)
-    Figure("Out", "−${Format.digits(spent)}")
-    Figure("Net", "${if (net >= 0) "+" else "−"}${Format.digits(net)}")
-  }
-  if (spent + received > 0) {
-    // The split grows from the middle seam when it first appears.
-    val grow by animateFloatAsState(1f, tween(500), label = "split")
-    Canvas(Modifier.fillMaxWidth().height(6.dp).padding(horizontal = Space.page)) {
-      val gapPx = 2.dp.toPx()
-      val total = (spent + received).toFloat()
-      val inW = (size.width - if (received > 0 && spent > 0) gapPx else 0f) * received / total * grow
-      val outW = (size.width - if (received > 0 && spent > 0) gapPx else 0f) * spent / total * grow
-      val r = CornerRadius(2.dp.toPx())
-      if (received > 0) drawRoundRect(Ember.income, Offset.Zero, Size(inW, size.height), r)
-      if (spent > 0) drawRoundRect(Ember.accent, Offset(size.width - outW, 0f), Size(outW, size.height), r)
-    }
-  }
-}
-
-@Composable
-private fun androidx.compose.foundation.layout.RowScope.Figure(label: String, value: String, tone: Tone = Tone.TEXT) {
-  Column(Modifier.weight(1f).padding(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-    Label(label, size = 12.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
-    Label(value, size = 17.sp, weight = FontWeight.Bold, tone = tone, maxLines = 1)
-  }
-}
-
-@Composable
-private fun WhereItWent(categories: List<Share>, payments: Int, onCategory: (String) -> Unit) {
-  val shown = categories.take(8)
-  SectionHead("Where it went", if (payments == 1) "1 payment" else "$payments payments")
-  Row(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, bottom = 8.dp).height(18.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-    shown.forEachIndexed { i, c ->
-      Box(Modifier.weight(maxOf(c.share, 0.005).toFloat()).height(10.dp).clip(RoundedCornerShape(2.dp)).background(shade(i, shown.size)))
-    }
-  }
-  shown.forEachIndexed { i, c -> ShareRow(i + 1, shade(i, shown.size), c) { onCategory("cat:${c.id ?: "none"}") } }
-}
-
-@Composable
-private fun WhereItCameFrom(sources: List<Share>) {
-  SectionHead("Where it came from")
-  sources.take(5).forEachIndexed { i, s -> ShareRow(i + 1, Ember.income, s, income = true) }
-}
-
-@Composable
-private fun ShareRow(rank: Int, swatch: Color, share: Share, income: Boolean = false, onPress: (() -> Unit)? = null) {
-  Row(
-    Modifier.fillMaxWidth().then(if (onPress != null) Modifier.clickable(onClick = onPress) else Modifier).padding(horizontal = Space.page, vertical = 11.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(12.dp),
-  ) {
-    Label(rank.toString().padStart(2, '0'), Modifier.width(18.dp), size = 12.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
-    Box(Modifier.size(8.dp).clip(RoundedCornerShape(2.dp)).background(swatch))
+private fun SourceRow(s: Share) {
+  Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Label(share.name, weight = FontWeight.Medium, maxLines = 1)
-      Label("${(share.share * 100).roundToInt()}%  ·  ${share.count}×", size = 12.sp, tone = Tone.MUTED)
+      Label(s.name, weight = FontWeight.Medium, maxLines = 1)
+      Label("${(s.share * 100).roundToInt()}%  ·  ${s.count}×", size = 12.sp, tone = Tone.MUTED)
     }
-    Label("${if (income) "+" else ""}${Format.digits(share.amount)}", weight = FontWeight.Medium, tone = if (income) Tone.INCOME else Tone.TEXT)
+    Label("+${Format.digits(s.amount)}", weight = FontWeight.Medium, tone = Tone.INCOME)
   }
 }
 
 @Composable
-private fun StatPlate(a: Analysis) {
-  val s = a.stats
+private fun StatPlate(s: RangeStats) {
   SectionHead("Numbers")
   Column(Modifier.fillMaxWidth().padding(horizontal = Space.page)) {
     Rule()

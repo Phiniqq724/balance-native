@@ -81,10 +81,14 @@ fun Rule(modifier: Modifier = Modifier) {
  * up to its new number, so a change reads as motion rather than a jump.
  */
 @Composable
-fun Money(value: Long, modifier: Modifier = Modifier, size: TextUnit = 46.sp, sign: String = "", color: Color = Ember.text) {
+fun Money(value: Long, modifier: Modifier = Modifier, size: TextUnit = 46.sp, sign: String = "", color: Color = Ember.text, animate: Boolean = true) {
   val anim = remember { Animatable(value.toFloat()) }
-  LaunchedEffect(value) { anim.animateTo(value.toFloat(), tween(650, easing = FastOutSlowInEasing)) }
-  val shown = anim.value.toLong()
+  // While a finger drives the value (dragging a range) it is a direct readout: no count-up.
+  LaunchedEffect(value, animate) {
+    if (animate) anim.animateTo(value.toFloat(), tween(650, easing = FastOutSlowInEasing)) else anim.snapTo(value.toFloat())
+  }
+  // Floats lose rupiah above ~16 million, so the settled number is always the exact value.
+  val shown = if (anim.isRunning) anim.value.toLong() else value
   Text(
     text = buildAnnotatedString {
       withStyle(SpanStyle(color = Ember.muted, fontSize = size * 0.42f, fontWeight = FontWeight.Medium)) { append("Rp ") }
