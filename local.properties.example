@@ -1,0 +1,5 @@
+# Copy to local.properties and fill in. local.properties is gitignored.
+sdk.dir=/path/to/Android/sdk
+balance.supabaseUrl=
+balance.supabaseKey=
+balance.googleWebClientId=

@@ -13,3 +13,29 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Kotlin compiler caches
+.kotlin/
+
+# Signing: never commit
+*.jks
+*.keystore
+keystore.properties
+
+# Built artifacts
+*.apk
+*.aab
+/app/release/
+
+# Firebase/Google config
+google-services.json
+
+# Per-machine IDE state
+/.idea/deviceManager.xml
+/.idea/deploymentTargetSelector.xml
+/.idea/misc.xml
+/.idea/gradle.xml
+/.idea/shelf/
+
+# Claude Code local settings
+.claude/settings.local.json
