@@ -103,14 +103,15 @@ fun Money(value: Long, modifier: Modifier = Modifier, size: TextUnit = 46.sp, si
   )
 }
 
+/** Sections are set apart by space and a heavier title, never by rules. */
 @Composable
 fun SectionHead(title: String, detail: String? = null, modifier: Modifier = Modifier) {
-  Column(modifier.fillMaxWidth().padding(top = 40.dp, bottom = 16.dp)) {
-    Rule()
-    Row(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-      Label(title, Modifier.weight(1f), weight = FontWeight.Bold)
-      if (detail != null) Label(detail, size = 13.sp, tone = Tone.MUTED)
-    }
+  Row(
+    modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 44.dp, bottom = 14.dp),
+    verticalAlignment = Alignment.Bottom,
+  ) {
+    Label(title, Modifier.weight(1f), size = 18.sp, weight = FontWeight.Bold)
+    if (detail != null) Label(detail, size = 13.sp, tone = Tone.MUTED)
   }
 }
 

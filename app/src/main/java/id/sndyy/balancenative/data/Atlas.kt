@@ -34,11 +34,16 @@ data class RangeStats(
   val baseSpent: Long?,
   /** Finishes "8% under …". */
   val baseLabel: String,
+  /** Length of the comparison range, for its per-day rate. */
+  val baseDays: Int?,
+  /** Days in the selection (up to today) with any spending. */
+  val spendDays: Int,
   val chart: ChartSeries,
   /** Day or "Week of" start for each chart slot, so a scrub can point at the grid. */
   val chartDays: List<LocalDate>,
 ) {
   val perDay: Double get() = spent.toDouble() / max(1, selection.days)
+  val basePerDay: Double? get() = baseSpent?.let { it.toDouble() / max(1, baseDays ?: 1) }
   val pace: Double? get() = baseSpent?.takeIf { it > 0 }?.let { (spent - it).toDouble() / it }
 }
 
@@ -192,6 +197,8 @@ class Book(val first: LocalDate, val today: LocalDate, flows: List<Flow>) {
       regular = group(out) { Triple(it.title.lowercase(), null, it.title) }.maxByOrNull { it.count }?.takeIf { it.count > 1 },
       baseSpent = base?.let { spent(it.first.start, it.first.end) },
       baseLabel = base?.second ?: "",
+      baseDays = base?.first?.days,
+      spendDays = (a..b).count { spentDay[it] > 0 },
       chart = ChartSeries(
         current = cur,
         previous = prev,

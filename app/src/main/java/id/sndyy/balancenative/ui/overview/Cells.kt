@@ -205,3 +205,39 @@ private fun Swatch(rank: Int, on: Boolean) {
     }
   }
 }
+
+/** A row of [total] cells with the first [filled] in [tone]; the rest sit at the empty heat step. */
+@Composable
+fun CellMeter(filled: Int, total: Int, tone: Color, modifier: Modifier = Modifier) {
+  BoxWithConstraints(modifier.fillMaxWidth()) {
+    val c = (maxWidth - CELL_GAP * (total - 1)) / total
+    Canvas(Modifier.fillMaxWidth().height(c)) {
+      val cp = c.toPx()
+      val p = cp + CELL_GAP.toPx()
+      for (i in 0 until total) cell(i * p, 0f, cp, if (i < filled) tone else Ember.heat[0])
+    }
+  }
+}
+
+/** Fraction to a count of [total] cells: anything above zero shows at least one. */
+fun cellsFor(fraction: Double, total: Int): Int =
+  if (fraction <= 0) 0 else (fraction * total).roundToInt().coerceIn(1, total)
+
+/**
+ * Where it came from as unit bars: each source gets a sage row on the grid's 20-column pitch, one
+ * cell per 5% of what came in, so the sources compare at a glance without a table.
+ */
+@Composable
+fun SourceBars(sources: List<Share>) {
+  Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    sources.take(5).forEach { s ->
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(verticalAlignment = Alignment.Bottom) {
+          Label(s.name, Modifier.weight(1f), weight = FontWeight.Medium, maxLines = 1)
+          Label("+${Format.digits(s.amount)}", weight = FontWeight.Medium, tone = Tone.INCOME)
+        }
+        CellMeter(cellsFor(s.share, PITCH_COLS), PITCH_COLS, Ember.income)
+      }
+    }
+  }
+}

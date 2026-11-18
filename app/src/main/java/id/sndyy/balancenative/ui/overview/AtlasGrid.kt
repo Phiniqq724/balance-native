@@ -17,6 +17,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
@@ -162,6 +164,18 @@ fun AtlasGrid(
         }
       }
 
+      // The selection is one soft shape: the union of each week's selected run, rounded at every
+      // corner. A faint ink wash fills it (it shows in the gaps), then a rounded ink line rims it.
+      val shape = if (view == AtlasView.YEAR) null else selectionShape(selection, book.today, firstWeek, cols, c, g, top, 1.5.dp.toPx())
+      val corner = android.graphics.CornerPathEffect(4.dp.toPx())
+      shape?.let { p ->
+        drawContext.canvas.nativeCanvas.drawPath(p, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+          style = android.graphics.Paint.Style.FILL
+          color = Ember.text.copy(alpha = 0.16f).toArgb()
+          pathEffect = corner
+        })
+      }
+
       for (col in 0 until cols) for (row in 0 until 7) {
         val d = firstWeek.plusWeeks(col.toLong()).plusDays(row.toLong())
         val level = book.level(d)
@@ -192,25 +206,45 @@ fun AtlasGrid(
           lineTo(x(b) + c - stroke / 2, top - 4.5.dp.toPx())
           lineTo(x(b) + c - stroke / 2, top - 1.dp.toPx())
         }
-        drawPath(path, Ember.text, style = Stroke(stroke))
+        drawPath(path, Ember.text, style = Stroke(stroke, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
       } else {
-        // Trace the outer edge of the selection on true day boundaries, through the middle of the gaps.
-        val o = g / 2
-        fun inSel(d: LocalDate) = d in selection && !d.isAfter(book.today)
-        val path = Path()
-        for (col in 0 until cols) for (row in 0 until 7) {
-          val d = firstWeek.plusWeeks(col.toLong()).plusDays(row.toLong())
-          if (!inSel(d)) continue
-          val x0 = x(col) - o; val y0 = y(row) - o; val x1 = x(col) + c + o; val y1 = y(row) + c + o
-          if (row == 0 || !inSel(d.minusDays(1))) { path.moveTo(x0, y0); path.lineTo(x1, y0) }
-          if (row == 6 || !inSel(d.plusDays(1))) { path.moveTo(x0, y1); path.lineTo(x1, y1) }
-          if (col == 0 || !inSel(d.minusDays(7))) { path.moveTo(x0, y0); path.lineTo(x0, y1) }
-          if (col == cols - 1 || !inSel(d.plusDays(7))) { path.moveTo(x1, y0); path.lineTo(x1, y1) }
+        shape?.let { p ->
+          drawContext.canvas.nativeCanvas.drawPath(p, android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = stroke
+            color = Ember.text.copy(alpha = 0.92f).toArgb()
+            pathEffect = corner
+          })
         }
-        drawPath(path, Ember.text, style = Stroke(stroke, cap = StrokeCap.Square))
       }
     }
   }
+}
+
+/**
+ * Union of one rectangle per week column (a contiguous range is one run per column), pushed out
+ * past the gap by [pad] so the rim never touches a cell. Plain rectangles union cleanly; the corner
+ * effect then rounds convex and concave corners alike.
+ */
+private fun selectionShape(sel: Selection, today: LocalDate, firstWeek: LocalDate, cols: Int, c: Float, g: Float, top: Float, pad: Float): android.graphics.Path? {
+  val o = g / 2 + pad
+  val pitch = c + g
+  var out: android.graphics.Path? = null
+  for (col in 0 until cols) {
+    val monday = firstWeek.plusWeeks(col.toLong())
+    var first = -1
+    var last = -1
+    for (row in 0 until 7) {
+      val d = monday.plusDays(row.toLong())
+      if (d in sel && !d.isAfter(today)) { if (first < 0) first = row; last = row }
+    }
+    if (first < 0) continue
+    val r = android.graphics.Path().apply {
+      addRect(col * pitch - o, top + first * pitch - o, col * pitch + c + o, top + last * pitch + c + o, android.graphics.Path.Direction.CW)
+    }
+    out = out?.apply { op(r, android.graphics.Path.Op.UNION) } ?: r
+  }
+  return out
 }
 
 private fun weekOf(d: LocalDate) = d.minusDays(d.dayOfWeek.value - 1L)

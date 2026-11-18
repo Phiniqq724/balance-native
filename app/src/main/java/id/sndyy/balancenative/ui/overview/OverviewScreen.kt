@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -278,13 +279,11 @@ private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (Str
       }
 
       if (stats.sources.isNotEmpty()) {
-        SectionHead("Where it came from")
-        Column(Modifier.padding(horizontal = Space.page)) {
-          stats.sources.take(5).forEach { SourceRow(it) }
-        }
+        SectionHead("Where it came from", "+${Format.rupiah(stats.received)}")
+        Column(Modifier.padding(horizontal = Space.page)) { SourceBars(stats.sources) }
       }
 
-      StatPlate(stats)
+      NumberCells(stats)
     }
     Spacer(Modifier.height(Space.navClearance))
   }
@@ -398,7 +397,6 @@ private fun ChartSlot(book: Book, stats: RangeStats, onScrub: (Int?) -> Unit) {
           Label(it.title, Modifier.weight(1f), size = 14.sp, maxLines = 1)
           Label("−${Format.digits(it.amount)}", size = 14.sp, weight = FontWeight.Medium)
         }
-        Rule()
       }
       if (flows.size > 4) Label("+${flows.size - 4} more", Modifier.padding(top = 8.dp), size = 12.sp, tone = Tone.MUTED)
     }
@@ -421,43 +419,57 @@ private fun ChartSlot(book: Book, stats: RangeStats, onScrub: (Int?) -> Unit) {
   )
 }
 
+/**
+ * Numbers as four large cells, two per row on the grid's pitch. Each carries one figure and a
+ * 10-cell meter that says what the figure means, so the plate reads without dividers.
+ */
 @Composable
-private fun SourceRow(s: Share) {
-  Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-      Label(s.name, weight = FontWeight.Medium, maxLines = 1)
-      Label("${(s.share * 100).roundToInt()}%  ·  ${s.count}×", size = 12.sp, tone = Tone.MUTED)
-    }
-    Label("+${Format.digits(s.amount)}", weight = FontWeight.Medium, tone = Tone.INCOME)
-  }
-}
-
-@Composable
-private fun StatPlate(s: RangeStats) {
+private fun NumberCells(s: RangeStats) {
   SectionHead("Numbers")
-  Column(Modifier.fillMaxWidth().padding(horizontal = Space.page)) {
-    Rule()
-    Row(Modifier.fillMaxWidth()) {
-      Stat("Per day", Format.rupiah(s.perDay.roundToInt().toLong()), first = true)
-      Box(Modifier.size(1.dp, 88.dp).background(Ember.line))
-      Stat("Biggest", s.biggest?.let { Format.rupiah(it.amount) } ?: "–", s.biggest?.title)
+  val perDayMax = maxOf(s.perDay, s.basePerDay ?: 0.0)
+  Column(Modifier.padding(horizontal = Space.page), verticalArrangement = Arrangement.spacedBy(CELL_GAP)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(CELL_GAP)) {
+      NumberCell(
+        "Per day", Format.rupiah(s.perDay.roundToInt().toLong()),
+        s.basePerDay?.let { "${Format.rupiah(it.roundToInt().toLong())} before" } ?: "Nothing earlier",
+        if (perDayMax > 0) s.perDay / perDayMax else 0.0,
+      )
+      NumberCell(
+        "Biggest", s.biggest?.let { Format.rupiah(it.amount) } ?: "–",
+        s.biggest?.title ?: "No payments",
+        if (s.spent > 0) (s.biggest?.amount ?: 0L).toDouble() / s.spent else 0.0,
+      )
     }
-    Rule()
-    Row(Modifier.fillMaxWidth()) {
-      Stat("Payments", s.payments.toString(), first = true)
-      Box(Modifier.size(1.dp, 88.dp).background(Ember.line))
-      Stat("Most often", s.regular?.name ?: "–", s.regular?.let { "${it.count} times" })
+    Row(horizontalArrangement = Arrangement.spacedBy(CELL_GAP)) {
+      NumberCell(
+        "Payments", s.payments.toString(),
+        "on ${s.spendDays} of ${s.selection.days} days",
+        s.spendDays.toDouble() / maxOf(1, s.selection.days),
+      )
+      NumberCell(
+        "Most often", s.regular?.name ?: "–",
+        s.regular?.let { "${it.count} of ${s.payments} payments" } ?: "Nothing repeats yet",
+        if (s.payments > 0) (s.regular?.count ?: 0).toDouble() / s.payments else 0.0,
+      )
     }
-    Rule()
   }
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.Stat(label: String, value: String, note: String? = null, first: Boolean = false) {
-  Column(Modifier.weight(1f).height(88.dp).padding(start = if (first) 0.dp else 16.dp, top = 14.dp, end = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+private fun androidx.compose.foundation.layout.RowScope.NumberCell(label: String, value: String, note: String, fraction: Double) {
+  Column(
+    Modifier
+      .weight(1f)
+      .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+      .background(Ember.surface)
+      .padding(14.dp),
+    verticalArrangement = Arrangement.spacedBy(3.dp),
+  ) {
     Label(label, size = 12.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
-    Label(value, size = 17.sp, weight = FontWeight.Bold, maxLines = 1)
-    if (note != null) Label(note, size = 12.sp, tone = Tone.MUTED, maxLines = 1)
+    Label(value, size = 18.sp, weight = FontWeight.Bold, maxLines = 1)
+    Label(note, size = 12.sp, tone = Tone.MUTED, maxLines = 1)
+    Spacer(Modifier.height(10.dp))
+    CellMeter(cellsFor(fraction, 10), 10, RANK_1)
   }
 }
 
