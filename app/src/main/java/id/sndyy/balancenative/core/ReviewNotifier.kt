@@ -141,7 +141,7 @@ internal object ReviewNotifier {
       .setOnlyAlertOnce(true)
       .setShowWhen(false)
       .setAutoCancel(true)
-      .setContentIntent(open(app, "projectbalance://activity?f=review", BADGE_ID))
+      .setContentIntent(open(app, "balancenative://activity?f=review", BADGE_ID))
       .build()
     try {
       manager.notify(BADGE_ID, notification)
@@ -195,10 +195,10 @@ internal object ReviewNotifier {
       .setAutoCancel(true)
       .setOnlyAlertOnce(true)
       .setGroup(GROUP)
-      .setContentIntent(open(context, "projectbalance://activity?f=review", id * 4))
+      .setContentIntent(open(context, "balancenative://activity?f=review", id * 4))
     if (item.suggestion && item.kind != "ad_or_other") builder.addAction(0, "Yes", answer(context, ACTION_YES, item.rawId, id * 4 + 1))
     builder.addAction(0, "Not money", answer(context, ACTION_NOT_MONEY, item.rawId, id * 4 + 2))
-    builder.addAction(0, "Fix", open(context, "projectbalance://activity?f=review&fix=${item.rawId}", id * 4 + 3))
+    builder.addAction(0, "Fix", open(context, "balancenative://activity?f=review&fix=${item.rawId}", id * 4 + 3))
 
     try {
       NotificationManagerCompat.from(context).notify(id, builder.build())
@@ -224,7 +224,7 @@ internal object ReviewNotifier {
       .setGroupSummary(true)
       .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
       .setAutoCancel(true)
-      .setContentIntent(open(context, "projectbalance://activity?f=review", SUMMARY_ID))
+      .setContentIntent(open(context, "balancenative://activity?f=review", SUMMARY_ID))
       .build()
     try {
       manager.notify(SUMMARY_ID, summary)

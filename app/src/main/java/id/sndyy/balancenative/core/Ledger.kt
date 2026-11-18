@@ -459,11 +459,15 @@ internal object Ledger {
   }
 }
 
-/** Lets the listener service reach the JS module while the app is open. */
-internal object BalanceEvents {
-  @Volatile var listener: (() -> Unit)? = null
+/** Ledger writes from anywhere in the process (UI, listener service, AI worker), as a stream the screens collect. */
+object BalanceEvents {
+  private val _changes = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
+    extraBufferCapacity = 1,
+    onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+  )
+  val changes: kotlinx.coroutines.flow.SharedFlow<Unit> = _changes
 
   fun emitLedgerChanged() {
-    listener?.invoke()
+    _changes.tryEmit(Unit)
   }
 }
