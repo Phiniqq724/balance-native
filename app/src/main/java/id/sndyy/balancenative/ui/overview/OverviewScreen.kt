@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -125,32 +126,35 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
 
   private val rest = spring<Float>(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow)
 
-  fun drag(book: Book, weeks: Float) {
+  // These are suspend functions run from the screen's own coroutine scope: animations need the
+  // composition's frame clock, which viewModelScope doesn't have (launching them there crashed).
+
+  suspend fun drag(book: Book, weeks: Float) {
     focus = null
     moving = true
-    viewModelScope.launch { pan.snapTo((pan.value + weeks).coerceIn(0f, mapMaxBack(book).toFloat())) }
+    pan.snapTo((pan.value + weeks).coerceIn(0f, mapMaxBack(book).toFloat()))
   }
 
   /** A fling carries on a little in its direction, then settles on the nearest whole week. */
-  fun release(book: Book, velocity: Float) {
-    viewModelScope.launch {
-      val target = (pan.value + velocity * 0.18f).roundToInt().coerceIn(0, mapMaxBack(book))
+  suspend fun release(book: Book, velocity: Float) {
+    val target = (pan.value + velocity * 0.18f).roundToInt().coerceIn(0, mapMaxBack(book))
+    try {
       pan.animateTo(target.toFloat(), rest, initialVelocity = velocity)
+    } finally {
       settled = target
       moving = false
     }
   }
 
-  fun jump(book: Book, back: Float, done: Boolean) {
+  suspend fun jump(book: Book, back: Float, done: Boolean) {
     focus = null
-    viewModelScope.launch {
-      if (!done) { moving = true; pan.snapTo(back) }
-      else {
-        val target = back.roundToInt().coerceIn(0, mapMaxBack(book))
-        pan.animateTo(target.toFloat(), rest)
-        settled = target
-        moving = false
-      }
+    if (!done) { moving = true; pan.snapTo(back); return }
+    val target = back.roundToInt().coerceIn(0, mapMaxBack(book))
+    try {
+      pan.animateTo(target.toFloat(), rest)
+    } finally {
+      settled = target
+      moving = false
     }
   }
 
@@ -181,6 +185,7 @@ fun OverviewScreen(onCategory: (String) -> Unit, vm: OverviewViewModel = viewMod
 private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (String) -> Unit) {
   val book = data.book
   val hostView = LocalView.current
+  val scope = rememberCoroutineScope()
   // The sections below follow where the map rests (or the focused week); the total follows the map live.
   val sel = vm.focus?.let { book.week(it) } ?: inView(book, vm.settled)
   val stats = remember(book, sel) { book.stats(sel) }
@@ -207,12 +212,12 @@ private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (Str
       back = { vm.pan.value },
       focus = vm.focus,
       cursor = cursor,
-      onDrag = { vm.drag(book, it) },
-      onRelease = { vm.release(book, it) },
+      onDrag = { scope.launch { vm.drag(book, it) } },
+      onRelease = { scope.launch { vm.release(book, it) } },
       onTap = { Haptic.key(hostView); vm.tap(it) },
       modifier = Modifier.padding(start = Space.page, end = Space.page, top = 12.dp),
     )
-    MapRuler(book, { vm.pan.value }, onJump = { b, done -> vm.jump(book, b, done) }, modifier = Modifier.padding(start = Space.page, end = Space.page, top = 14.dp))
+    MapRuler(book, { vm.pan.value }, onJump = { b, done -> scope.launch { vm.jump(book, b, done) } }, modifier = Modifier.padding(start = Space.page, end = Space.page, top = 14.dp))
 
     if (data.empty) {
       Label(
