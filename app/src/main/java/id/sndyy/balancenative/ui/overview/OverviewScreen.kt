@@ -215,7 +215,7 @@ private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (Str
       onDrag = { scope.launch { vm.drag(book, it) } },
       onRelease = { scope.launch { vm.release(book, it) } },
       onTap = { Haptic.key(hostView); vm.tap(it) },
-      modifier = Modifier.padding(start = Space.page, end = Space.page, top = 12.dp),
+      modifier = Modifier.padding(start = Space.page - MAP_PAD, end = Space.page - MAP_PAD, top = 12.dp),
     )
     MapRuler(book, { vm.pan.value }, onJump = { b, done -> scope.launch { vm.jump(book, b, done) } }, modifier = Modifier.padding(start = Space.page, end = Space.page, top = 14.dp))
 

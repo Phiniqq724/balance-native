@@ -43,6 +43,8 @@ import kotlin.math.min
 const val MAP_WEEKS = 13
 private val MAP_GAP = 3.dp
 private val MAP_LABELS = 16.dp
+/** Breathing room inside the canvas so a focused week's rim is never cut at the edges. */
+val MAP_PAD = 5.dp
 
 /** The week of the first thing ever logged: the map never travels before it. */
 fun dataWeek(book: Book): LocalDate = monday(maxOf(book.first, book.firstData ?: book.today))
@@ -85,9 +87,9 @@ fun MapGrid(
   val now = mapEnd(book)
 
   BoxWithConstraints(modifier.fillMaxWidth()) {
-    val cell = (maxWidth - MAP_GAP * (MAP_WEEKS - 1)) / MAP_WEEKS
+    val cell = (maxWidth - MAP_PAD * 2 - MAP_GAP * (MAP_WEEKS - 1)) / MAP_WEEKS
     val pitchDp = cell + MAP_GAP
-    val height = MAP_LABELS + cell * 7 + MAP_GAP * 6
+    val height = MAP_LABELS + cell * 7 + MAP_GAP * 6 + MAP_PAD
     val density = androidx.compose.ui.platform.LocalDensity.current.density
     val state = rememberDraggableState { px -> drag(px / (pitchDp.value * density)) }
 
@@ -103,7 +105,7 @@ fun MapGrid(
             val pitch = pitchDp.toPx()
             val backNow = back()
             val frac = backNow - floor(backNow)
-            val k = floor(o.x / pitch - frac).toInt()
+            val k = floor((o.x - MAP_PAD.toPx()) / pitch - frac).toInt()
             val week = now.minusWeeks((floor(backNow).toInt() + MAP_WEEKS - 1 - k).toLong())
             if (!week.isAfter(book.today) && !week.isBefore(dataWeek(book))) tap(week)
           }
@@ -120,7 +122,8 @@ fun MapGrid(
       val radius = CornerRadius(3.dp.toPx())
 
       fun mondayOf(k: Int): LocalDate = now.minusWeeks((base + MAP_WEEKS - 1 - k).toLong())
-      fun xOf(k: Int) = (k + frac) * pitch
+      val pad = MAP_PAD.toPx()
+      fun xOf(k: Int) = pad + (k + frac) * pitch
 
       clipRect(0f, 0f, size.width, size.height) {
         // Month names where a month's first week starts.
@@ -159,9 +162,9 @@ fun MapGrid(
 
       // Soft edges say "there's more this way"; the right edge fades only when the future isn't next.
       val fade = 22.dp.toPx()
-      // Nothing to fade into before the first entry.
-      if (b < mapMaxBack(book) - 0.01f) drawRect(Brush.horizontalGradient(listOf(Ember.bg, Color.Transparent), 0f, fade), Offset(0f, top - 4f), Size(fade, size.height))
-      if (b > 0.01f) drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Ember.bg), size.width - fade, size.width), Offset(size.width - fade, top - 4f), Size(fade, size.height))
+      // Both edges always fade, so the map reads as a window onto a longer strip of time.
+      drawRect(Brush.horizontalGradient(listOf(Ember.bg, Color.Transparent), 0f, fade), Offset(0f, top - 4f), Size(fade, size.height))
+      drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Ember.bg), size.width - fade, size.width), Offset(size.width - fade, top - 4f), Size(fade, size.height))
     }
   }
 }
