@@ -44,12 +44,21 @@ const val MAP_WEEKS = 13
 private val MAP_GAP = 3.dp
 private val MAP_LABELS = 16.dp
 
-/** Monday of the first visible week when the map's right edge is [back] whole weeks before this week. */
-fun mapStart(book: Book, back: Int): LocalDate = monday(book.today).minusWeeks((back + MAP_WEEKS - 1).toLong())
+/** The week of the first thing ever logged: the map never travels before it. */
+fun dataWeek(book: Book): LocalDate = monday(maxOf(book.first, book.firstData ?: book.today))
 
-/** Furthest the map can travel back: until its first column reaches the start of the book. */
+/**
+ * Monday of the map's rightmost column at rest. Normally this week; with less than [MAP_WEEKS] weeks
+ * of history the map starts at the first entry instead, and the weeks still to come fill the right.
+ */
+fun mapEnd(book: Book): LocalDate = maxOf(monday(book.today), dataWeek(book).plusWeeks((MAP_WEEKS - 1).toLong()))
+
+/** Monday of the first visible week when the map's right edge is [back] whole weeks before [mapEnd]. */
+fun mapStart(book: Book, back: Int): LocalDate = mapEnd(book).minusWeeks((back + MAP_WEEKS - 1).toLong())
+
+/** Furthest the map can travel back: until its first column is the week of the first entry. */
 fun mapMaxBack(book: Book): Int =
-  maxOf(0, ((monday(book.today).toEpochDay() - monday(book.first).toEpochDay()) / 7).toInt() - (MAP_WEEKS - 1))
+  maxOf(0, ((mapEnd(book).toEpochDay() - dataWeek(book).toEpochDay()) / 7).toInt() - (MAP_WEEKS - 1))
 
 /**
  * The map: [MAP_WEEKS] columns of days that slide through time. [back] is how many weeks the right
@@ -73,7 +82,7 @@ fun MapGrid(
   val drag by rememberUpdatedState(onDrag)
   val release by rememberUpdatedState(onRelease)
   val tap by rememberUpdatedState(onTap)
-  val now = monday(book.today)
+  val now = mapEnd(book)
 
   BoxWithConstraints(modifier.fillMaxWidth()) {
     val cell = (maxWidth - MAP_GAP * (MAP_WEEKS - 1)) / MAP_WEEKS
@@ -96,7 +105,7 @@ fun MapGrid(
             val frac = backNow - floor(backNow)
             val k = floor(o.x / pitch - frac).toInt()
             val week = now.minusWeeks((floor(backNow).toInt() + MAP_WEEKS - 1 - k).toLong())
-            if (!week.isAfter(book.today) && !week.plusDays(6).isBefore(book.first)) tap(week)
+            if (!week.isAfter(book.today) && !week.isBefore(dataWeek(book))) tap(week)
           }
         },
     ) {
@@ -150,7 +159,8 @@ fun MapGrid(
 
       // Soft edges say "there's more this way"; the right edge fades only when the future isn't next.
       val fade = 22.dp.toPx()
-      drawRect(Brush.horizontalGradient(listOf(Ember.bg, Color.Transparent), 0f, fade), Offset(0f, top - 4f), Size(fade, size.height))
+      // Nothing to fade into before the first entry.
+      if (b < mapMaxBack(book) - 0.01f) drawRect(Brush.horizontalGradient(listOf(Ember.bg, Color.Transparent), 0f, fade), Offset(0f, top - 4f), Size(fade, size.height))
       if (b > 0.01f) drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Ember.bg), size.width - fade, size.width), Offset(size.width - fade, top - 4f), Size(fade, size.height))
     }
   }
@@ -163,8 +173,8 @@ fun MapGrid(
 @Composable
 fun MapRuler(book: Book, back: () -> Float, onJump: (back: Float, done: Boolean) -> Unit, modifier: Modifier = Modifier) {
   val jump by rememberUpdatedState(onJump)
-  val now = monday(book.today)
-  val first = monday(book.first)
+  val now = mapEnd(book)
+  val first = dataWeek(book)
   val weeks = ((now.toEpochDay() - first.toEpochDay()) / 7).toInt() + 1
   // Weekly totals, ranked into the same five steps as the days.
   val levels = remember(book) {

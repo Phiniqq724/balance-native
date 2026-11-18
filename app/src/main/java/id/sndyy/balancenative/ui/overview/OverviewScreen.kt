@@ -271,14 +271,10 @@ private fun MapHeader(data: OverviewData, book: Book, vm: OverviewViewModel, onC
   val live = vm.focus?.let { book.week(it) } ?: inView(book, vm.pan.value.roundToInt())
   val liveSpent = book.spent(live.start, live.end)
   Column(Modifier.padding(start = Space.page, end = Space.page, top = 24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Row(Modifier.fillMaxWidth().height(22.dp), verticalAlignment = Alignment.CenterVertically) {
-        AnimatedContent(
-          targetState = if (vm.focus != null) "Week of ${live.start.dayOfMonth} ${Format.shortMonth(live.start)}" else "${selectionLabel(live)} · $MAP_WEEKS weeks in view",
-          transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(90)) },
-          modifier = Modifier.weight(1f),
-          label = "inView",
-        ) { Label(it, size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED, maxLines = 1) }
-        if (vm.focus != null) {
+      // No caption for the view itself: the map shows what's counted. A focused week says which one.
+      AnimatedVisibility(vm.focus != null, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+        Row(Modifier.fillMaxWidth().height(24.dp), verticalAlignment = Alignment.CenterVertically) {
+          Label("Week of ${live.start.dayOfMonth} ${Format.shortMonth(live.start)}", Modifier.weight(1f), size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED, maxLines = 1)
           Label("×", Modifier.size(28.dp).clip(androidx.compose.foundation.shape.CircleShape).clickable { Haptic.key(hostView); vm.clearFocus() }
             .semantics { contentDescription = "Back to the whole view" }.padding(start = 9.dp, top = 2.dp), size = 17.sp, tone = Tone.MUTED)
         }
@@ -305,7 +301,7 @@ private fun compare(book: Book, sel: Selection, week: Boolean): String {
   val base = book.spent(before, sel.start.minusDays(1))
   if (base <= 0) return "Nothing earlier to compare"
   val pct = ((book.spent(sel.start, sel.end) - base) * 100.0 / base).roundToInt()
-  val label = if (week) "the week before" else "the $MAP_WEEKS weeks before"
+  val label = if (week) "the week before" else "the weeks before"
   return if (pct == 0) "Level with $label" else "${abs(pct)}% ${if (pct < 0) "under" else "over"} $label"
 }
 
