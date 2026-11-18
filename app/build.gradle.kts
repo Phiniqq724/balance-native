@@ -40,9 +40,18 @@ android {
         }
         release {
             resValue("string", "app_name", "Balance Native")
-            optimization {
-                enable = false
-            }
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "src/main/keepRules/rules.keep")
+        }
+        // Release speed (R8, not debuggable) for judging how the app feels. Same app id and debug key as
+        // the Dev build, so it installs over it, keeps its data, and Google sign-in keeps working.
+        create("fast") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".dev"
+            resValue("string", "app_name", "Balance Native Dev")
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += listOf("release")
         }
     }
     compileOptions {
@@ -78,6 +87,8 @@ dependencies {
     implementation(libs.androidx.glance.material3)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
+    // Installs the Compose/library baseline profiles on sideloaded builds, so the first open is compiled, not interpreted.
+    implementation(libs.androidx.profileinstaller)
     testImplementation(libs.junit)
     // Android's org.json is a stub on the JVM; the parser tests need the real one.
     testImplementation(libs.org.json)
