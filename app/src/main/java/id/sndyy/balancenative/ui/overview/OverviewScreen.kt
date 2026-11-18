@@ -1,10 +1,12 @@
 package id.sndyy.balancenative.ui.overview
 
 import android.app.Application
-import android.content.Context
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,7 +14,6 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,22 +25,22 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -52,27 +53,18 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import id.sndyy.balancenative.balance
 import id.sndyy.balancenative.core.FlowChart
 import id.sndyy.balancenative.core.FlowChartProps
-import id.sndyy.balancenative.data.AtlasView
 import id.sndyy.balancenative.data.Book
 import id.sndyy.balancenative.data.Direction
 import id.sndyy.balancenative.data.Format
-import id.sndyy.balancenative.data.Preset
 import id.sndyy.balancenative.data.RangeStats
 import id.sndyy.balancenative.data.Selection
-import id.sndyy.balancenative.data.Share
-import id.sndyy.balancenative.data.Span
-import id.sndyy.balancenative.data.monday
-import id.sndyy.balancenative.data.viewFor
-import id.sndyy.balancenative.ui.kit.CellButton
 import id.sndyy.balancenative.ui.kit.Failed
 import id.sndyy.balancenative.ui.kit.Haptic
 import id.sndyy.balancenative.ui.kit.Label
 import id.sndyy.balancenative.ui.kit.Loaded
 import id.sndyy.balancenative.ui.kit.Loading
 import id.sndyy.balancenative.ui.kit.Money
-import id.sndyy.balancenative.ui.kit.Rule
 import id.sndyy.balancenative.ui.kit.SectionHead
-import id.sndyy.balancenative.ui.kit.SqueezeRow
 import id.sndyy.balancenative.ui.kit.SyncRefresh
 import id.sndyy.balancenative.ui.kit.Tone
 import id.sndyy.balancenative.ui.kit.UiEvents
@@ -80,6 +72,9 @@ import id.sndyy.balancenative.ui.kit.ledgerState
 import id.sndyy.balancenative.ui.theme.Ember
 import id.sndyy.balancenative.ui.theme.Space
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import kotlin.math.abs
@@ -96,7 +91,6 @@ data class OverviewData(
 
 class OverviewViewModel(app: Application) : AndroidViewModel(app) {
   private val core = app.balance.core
-  private val prefs = app.getSharedPreferences("balance.ui", Context.MODE_PRIVATE)
 
   val state = viewModelScope.ledgerState {
     val today = LocalDate.now()
@@ -114,91 +108,63 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
     }
   }
 
-  // Lives with the ViewModel: survives rotation, resets to This month when the app restarts.
-  var selection by mutableStateOf<Selection?>(null)
+  /**
+   * How many weeks the map's right edge sits behind this week. Fractional while a finger or a fling
+   * moves it; it always comes to rest on a whole week. Lives with the ViewModel, so it survives
+   * rotation and starts at "now" when the app restarts.
+   */
+  val pan = Animatable(0f)
+  /** Where the map last came to rest: what the sections below describe. */
+  var settled by mutableIntStateOf(0)
     private set
-  var view by mutableStateOf(AtlasView.WEEKS)
+  var moving by mutableStateOf(false)
     private set
-  /** Last column's Monday while drilled into 8 weeks. */
-  var daysEnd by mutableStateOf<LocalDate?>(null)
-    private set
-  /** True while a finger is dragging a range: totals snap instead of counting up. */
-  var dragging by mutableStateOf(false)
-    private set
-  var hint by mutableStateOf(false)
+  /** A tapped week, shown instead of the whole view until it's cleared or the map moves. */
+  var focus by mutableStateOf<LocalDate?>(null)
     private set
 
-  fun current(book: Book): Selection = selection ?: book.preset(Preset.MONTH)
+  private val rest = spring<Float>(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow)
 
-  private fun select(book: Book, sel: Selection) {
-    selection = sel
-    view = viewFor(sel, view)
-    if (view == AtlasView.DAYS) {
-      val end = daysEnd ?: monday(book.today)
-      if (monday(sel.start).isBefore(end.minusWeeks(7)) || monday(sel.end).isAfter(end)) daysEnd = centred(book, sel)
+  fun drag(book: Book, weeks: Float) {
+    focus = null
+    moving = true
+    viewModelScope.launch { pan.snapTo((pan.value + weeks).coerceIn(0f, mapMaxBack(book).toFloat())) }
+  }
+
+  /** A fling carries on a little in its direction, then settles on the nearest whole week. */
+  fun release(book: Book, velocity: Float) {
+    viewModelScope.launch {
+      val target = (pan.value + velocity * 0.18f).roundToInt().coerceIn(0, mapMaxBack(book))
+      pan.animateTo(target.toFloat(), rest, initialVelocity = velocity)
+      settled = target
+      moving = false
     }
   }
 
-  private fun centred(book: Book, sel: Selection): LocalDate {
-    val mid = sel.start.plusDays(sel.days / 2L)
-    return minOf(monday(book.today), monday(mid).plusWeeks(3))
-  }
-
-  fun lastWeek(book: Book, view: AtlasView = this.view): LocalDate {
-    val now = monday(book.today)
-    return when (view) {
-      AtlasView.YEAR -> now
-      AtlasView.DAYS -> daysEnd ?: now
-      AtlasView.WEEKS -> {
-        val start = monday(current(book).start)
-        if (start.isBefore(now.minusWeeks(19))) start.plusWeeks(19) else now
+  fun jump(book: Book, back: Float, done: Boolean) {
+    focus = null
+    viewModelScope.launch {
+      if (!done) { moving = true; pan.snapTo(back) }
+      else {
+        val target = back.roundToInt().coerceIn(0, mapMaxBack(book))
+        pan.animateTo(target.toFloat(), rest)
+        settled = target
+        moving = false
       }
     }
   }
 
-  fun tap(book: Book, d: LocalDate) {
-    if (d.isAfter(book.today)) return
-    dragging = false
-    select(book, when (view) {
-      AtlasView.WEEKS -> book.week(d)
-      AtlasView.DAYS -> book.day(d)
-      AtlasView.YEAR -> book.month(d)
-    })
-  }
+  fun tap(week: LocalDate) { focus = if (focus == week) null else week }
 
-  fun drag(book: Book, from: LocalDate, to: LocalDate, done: Boolean) {
-    if (minOf(from, to).isAfter(book.today)) return
-    dragging = !done
-    select(book, if (view == AtlasView.YEAR) book.months(from, to) else book.range(from, to))
-  }
-
-  fun preset(book: Book, p: Preset) { dragging = false; select(book, book.preset(p)) }
-
-  fun canStep(book: Book, dir: Int) = book.step(current(book), dir) != null
-
-  fun step(book: Book, dir: Int): Boolean {
-    val next = book.step(current(book), dir) ?: return false
-    dragging = false
-    select(book, next)
-    return true
-  }
-
-  fun drill(book: Book) { daysEnd = centred(book, current(book)); view = AtlasView.DAYS }
-
-  fun weeks() { view = AtlasView.WEEKS }
-
-  fun reset() { selection = null; view = AtlasView.WEEKS; dragging = false }
-
-  /** "Hold and drag to pick days" shows once, the first time a touch rests on the grid. */
-  fun held() {
-    if (prefs.getBoolean("atlas_hint", false)) return
-    prefs.edit().putBoolean("atlas_hint", true).apply()
-    hint = true
-  }
-
-  fun hintDone() { hint = false }
+  fun clearFocus() { focus = null }
 
   fun openAccess() = core.openNotificationAccessSettings()
+}
+
+/** The days the map shows when its right edge is [back] weeks behind this week. */
+private fun inView(book: Book, back: Int): Selection {
+  val start = mapStart(book, back)
+  return Selection(maxOf(book.first, start), minOf(book.today, start.plusWeeks(MAP_WEEKS.toLong()).minusDays(1)))
 }
 
 @Composable
@@ -214,47 +180,39 @@ fun OverviewScreen(onCategory: (String) -> Unit, vm: OverviewViewModel = viewMod
 @Composable
 private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (String) -> Unit) {
   val book = data.book
-  val sel = vm.current(book)
+  val hostView = LocalView.current
+  // The sections below follow where the map rests (or the focused week); the total follows the map live.
+  val sel = vm.focus?.let { book.week(it) } ?: inView(book, vm.settled)
   val stats = remember(book, sel) { book.stats(sel) }
   var cursor by remember { mutableStateOf<LocalDate?>(null) }
   var highlight by remember(sel) { mutableStateOf<String?>(null) }
 
-  if (vm.hint) androidx.compose.runtime.LaunchedEffect(Unit) { kotlinx.coroutines.delay(2600); vm.hintDone() }
+  // A tick for every week the map crosses, a firmer one when a new month comes into view.
+  LaunchedEffect(book) {
+    snapshotFlow { vm.pan.value.roundToInt() }.distinctUntilChanged().drop(1).collect { b ->
+      val start = mapStart(book, b)
+      if (start.dayOfMonth <= 7) Haptic.month(hostView) else Haptic.week(hostView)
+    }
+  }
 
   Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding()) {
     AnimatedVisibility(!data.hasAccess, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
       AccessBanner(vm::openAccess)
     }
 
-    // Switching view (drilling in, the year preset) crossfades while the height eases to the new grid.
-    androidx.compose.animation.Crossfade(
-      targetState = vm.view,
-      animationSpec = androidx.compose.animation.core.tween(180),
-      modifier = Modifier.animateContentSize(androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow)),
-      label = "atlasView",
-    ) { v ->
-      AtlasGrid(
-        book = book,
-        selection = sel,
-        view = v,
-        lastWeek = vm.lastWeek(book, v),
-        cursor = cursor,
-        onTap = { vm.tap(book, it) },
-        onDrag = { a, b, done -> vm.drag(book, a, b, done) },
-        onHold = vm::held,
-        modifier = Modifier.padding(start = Space.page, end = Space.page, top = 20.dp),
-      )
-    }
+    MapHeader(data, book, vm, onCategory)
 
-    Caption(stats, vm, book)
-
-    Presets(sel.preset, onPick = { vm.preset(book, it) })
-
-    Column(Modifier.padding(start = Space.page, end = Space.page, top = 20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Label("Spent", size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
-      Money(stats.spent, size = totalSize(stats.spent), animate = !vm.dragging)
-      Status(data) { onCategory("review") }
-    }
+    MapGrid(
+      book = book,
+      back = { vm.pan.value },
+      focus = vm.focus,
+      cursor = cursor,
+      onDrag = { vm.drag(book, it) },
+      onRelease = { vm.release(book, it) },
+      onTap = { Haptic.key(hostView); vm.tap(it) },
+      modifier = Modifier.padding(start = Space.page, end = Space.page, top = 12.dp),
+    )
+    MapRuler(book, { vm.pan.value }, onJump = { b, done -> vm.jump(book, b, done) }, modifier = Modifier.padding(start = Space.page, end = Space.page, top = 14.dp))
 
     if (data.empty) {
       Label(
@@ -298,6 +256,35 @@ private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (Str
   }
 }
 
+/**
+ * What's in view and what it cost. The only part of the screen that recomposes while the map moves:
+ * it reads the live position, everything below reads where the map last came to rest.
+ */
+@Composable
+private fun MapHeader(data: OverviewData, book: Book, vm: OverviewViewModel, onCategory: (String) -> Unit) {
+  val hostView = LocalView.current
+  val live = vm.focus?.let { book.week(it) } ?: inView(book, vm.pan.value.roundToInt())
+  val liveSpent = book.spent(live.start, live.end)
+  Column(Modifier.padding(start = Space.page, end = Space.page, top = 24.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Row(Modifier.fillMaxWidth().height(22.dp), verticalAlignment = Alignment.CenterVertically) {
+        AnimatedContent(
+          targetState = if (vm.focus != null) "Week of ${live.start.dayOfMonth} ${Format.shortMonth(live.start)}" else "${selectionLabel(live)} · $MAP_WEEKS weeks in view",
+          transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(90)) },
+          modifier = Modifier.weight(1f),
+          label = "inView",
+        ) { Label(it, size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED, maxLines = 1) }
+        if (vm.focus != null) {
+          Label("×", Modifier.size(28.dp).clip(androidx.compose.foundation.shape.CircleShape).clickable { Haptic.key(hostView); vm.clearFocus() }
+            .semantics { contentDescription = "Back to the whole view" }.padding(start = 9.dp, top = 2.dp), size = 17.sp, tone = Tone.MUTED)
+        }
+      }
+      Money(liveSpent, size = totalSize(liveSpent), animate = !vm.moving)
+      Label(compare(book, live, vm.focus != null), size = 13.sp, tone = Tone.MUTED, maxLines = 1)
+      Status(data) { onCategory("review") }
+    }
+
+}
+
 /** Display size from the digit count, never measured, so it can't jitter mid-drag. */
 private fun totalSize(value: Long) = when (abs(value).toString().length) {
   in 0..7 -> 52.sp
@@ -305,79 +292,16 @@ private fun totalSize(value: Long) = when (abs(value).toString().length) {
   else -> 40.sp
 }
 
-/**
- * Two fixed lines under the grid: ‹ range › then the comparison with the drill and reset links.
- * A horizontal swipe on this band steps the period; the rest of the page still swipes tabs.
- */
-@Composable
-private fun Caption(stats: RangeStats, vm: OverviewViewModel, book: Book) {
-  val view = LocalView.current
-  val sel = stats.selection
-  val threshold = with(LocalDensity.current) { 40.dp.toPx() }
-  fun step(dir: Int) { if (vm.step(book, dir)) Haptic.confirm(view) }
-  Column(
-    Modifier
-      .fillMaxWidth()
-      .padding(start = Space.page - 8.dp, end = Space.page, top = 10.dp)
-      .pointerInput(book) {
-        var dx = 0f
-        detectHorizontalDragGestures(
-          onDragStart = { dx = 0f },
-          onDragEnd = { if (abs(dx) > threshold) step(if (dx > 0) -1 else 1) },
-        ) { change, amount -> change.consume(); dx += amount }
-      },
-  ) {
-    Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
-      Stepper("‹", "Previous period", vm.canStep(book, -1)) { step(-1) }
-      AnimatedContent(
-        targetState = "${if (sel.days == 1) "1 day" else "${sel.days} days"} · ${selectionLabel(sel)}",
-        transitionSpec = { fadeIn(androidx.compose.animation.core.tween(120)) togetherWith fadeOut(androidx.compose.animation.core.tween(90)) },
-        modifier = Modifier.weight(1f),
-        label = "range",
-      ) { Label(it, Modifier.fillMaxWidth(), size = 15.sp, weight = FontWeight.Bold, maxLines = 1) }
-      Stepper("›", "Next period", vm.canStep(book, 1)) { step(1) }
-    }
-    Row(Modifier.fillMaxWidth().height(22.dp).padding(start = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-      Label(if (vm.hint) "Hold and drag to pick days" else compare(stats), Modifier.weight(1f), size = 13.sp, tone = Tone.MUTED, maxLines = 1)
-      val link = when {
-        vm.view == AtlasView.DAYS -> "‹ Weeks"
-        vm.view == AtlasView.WEEKS && sel.span == Span.WEEK && sel.preset == null -> "Days ›"
-        else -> null
-      }
-      if (link != null) Label(link, Modifier.clickable { Haptic.key(view); if (vm.view == AtlasView.DAYS) vm.weeks() else vm.drill(book) }, size = 13.sp, weight = FontWeight.Bold)
-      val isDefault = sel.preset == Preset.MONTH && vm.view == AtlasView.WEEKS
-      if (!isDefault) Label("×", Modifier.width(20.dp).clickable { Haptic.key(view); vm.reset() }.semantics { contentDescription = "Back to this month" }, size = 16.sp, tone = Tone.MUTED)
-    }
-  }
-}
-
-private fun compare(stats: RangeStats): String {
-  val pace = stats.pace ?: return "Nothing earlier to compare"
-  val pct = (abs(pace) * 100).roundToInt()
-  return if (pct == 0) "Level with ${stats.baseLabel}" else "$pct% ${if (pace < 0) "under" else "over"} ${stats.baseLabel}"
-}
-
-@Composable
-private fun Stepper(glyph: String, description: String, enabled: Boolean, onClick: () -> Unit) {
-  Box(
-    Modifier.size(36.dp).clickable(enabled = enabled, onClick = onClick).semantics { contentDescription = description },
-    contentAlignment = Alignment.Center,
-  ) { Label(glyph, size = 20.sp, color = if (enabled) Ember.muted else Ember.line) }
-}
-
-/** W M Q Y as one squeeze row of cell controls, cut to the grid's columns (5 each). */
-@Composable
-private fun Presets(active: Preset?, onPick: (Preset) -> Unit) {
-  SqueezeRow(
-    count = Preset.entries.size,
-    modifier = Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 12.dp),
-    chosen = active?.ordinal ?: -1,
-  ) { i, source, weight ->
-    val p = Preset.entries[i]
-    CellButton(on = p == active, onClick = { onPick(p) }, modifier = weight, source = source) { fg ->
-      Label(p.label, size = 13.sp, weight = FontWeight.Bold, color = fg, maxLines = 1)
-    }
-  }
+/** Against the same number of days just before what's in view (prefix sums, so it's free mid-drag). */
+private fun compare(book: Book, sel: Selection, week: Boolean): String {
+  val n = sel.days.toLong()
+  val before = sel.start.minusDays(n)
+  if (before.isBefore(book.first) || book.firstData?.let { sel.start.minusDays(1).isBefore(it) } != false) return "Nothing earlier to compare"
+  val base = book.spent(before, sel.start.minusDays(1))
+  if (base <= 0) return "Nothing earlier to compare"
+  val pct = ((book.spent(sel.start, sel.end) - base) * 100.0 / base).roundToInt()
+  val label = if (week) "the week before" else "the $MAP_WEEKS weeks before"
+  return if (pct == 0) "Level with $label" else "${abs(pct)}% ${if (pct < 0) "under" else "over"} $label"
 }
 
 @Composable
