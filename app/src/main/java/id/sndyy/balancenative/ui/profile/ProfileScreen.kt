@@ -37,6 +37,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -50,6 +51,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import id.sndyy.balancenative.BuildConfig
 import id.sndyy.balancenative.balance
 import id.sndyy.balancenative.core.AccountState
 import id.sndyy.balancenative.core.BalanceCore
@@ -159,6 +161,11 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
 
     SectionHead("Account")
     Group { AccountRows(accountState) }
+
+    if (BuildConfig.DEV_TOOLS) {
+      SectionHead("Developer")
+      Group { DevRows(accountState) }
+    }
 
     Spacer(Modifier.height(140.dp))
   }
@@ -384,6 +391,38 @@ private fun DataRows() {
       },
       dismissButton = { TextButton(onClick = { preview = null }) { Label("Cancel", tone = Tone.MUTED) } },
     )
+  }
+}
+
+/** Dummy data for load testing. Local mode only: signed-in ledgers sync, and these must never reach the cloud. */
+@Composable
+private fun DevRows(state: AccountState) {
+  val core = LocalContext.current.balance.core
+  val scope = rememberCoroutineScope()
+  var note by remember { mutableStateOf<String?>(null) }
+  val count by produceState(0) {
+    value = core.dummyCount()
+    BalanceCore.changes.collect { value = core.dummyCount() }
+  }
+  val local = state is AccountState.Local
+
+  SettingsRow(
+    "Add 1,000 dummy entries",
+    if (local) "Spread over the last three years. Tap again to stack more." else "Switch to “Use this phone only” first",
+    status = note,
+    tone = if (local) Tone.TEXT else Tone.MUTED,
+    statusTone = if (note == "Failed") Tone.DANGER else Tone.MUTED,
+    onPress = if (local && note != "Working…") ({
+      note = "Working…"
+      scope.launch {
+        note = runCatching { core.seedDummy(1000) }.fold({ (n, ms) -> "%,d in %,d ms".format(n, ms) }, { "Failed" })
+      }
+    }) else null,
+  )
+  if (count > 0) {
+    SettingsRow("Remove dummy entries", "Real entries stay", status = "%,d".format(count), tone = Tone.DANGER) {
+      scope.launch { core.clearDummy(); note = null }
+    }
   }
 }
 

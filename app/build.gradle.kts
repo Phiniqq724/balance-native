@@ -29,6 +29,8 @@ android {
         buildConfigField("String", "SUPABASE_URL", localString("balance.supabaseUrl"))
         buildConfigField("String", "SUPABASE_KEY", localString("balance.supabaseKey"))
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", localString("balance.googleWebClientId"))
+        // Profile → Developer (dummy data for load testing). On in Dev and fast, off in release.
+        buildConfigField("boolean", "DEV_TOOLS", "true")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -40,6 +42,7 @@ android {
         }
         release {
             resValue("string", "app_name", "Balance Native")
+            buildConfigField("boolean", "DEV_TOOLS", "false")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "src/main/keepRules/rules.keep")
@@ -50,6 +53,7 @@ android {
             initWith(getByName("release"))
             applicationIdSuffix = ".dev"
             resValue("string", "app_name", "Balance Native Dev")
+            buildConfigField("boolean", "DEV_TOOLS", "true")
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
         }

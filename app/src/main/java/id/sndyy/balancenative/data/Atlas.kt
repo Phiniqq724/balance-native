@@ -41,6 +41,8 @@ data class RangeStats(
   val chart: ChartSeries,
   /** Day or "Week of" start for each chart slot, so a scrub can point at the grid. */
   val chartDays: List<LocalDate>,
+  /** The selection's payments out, oldest first: a one-day selection lists them in place of a chart. */
+  val outFlows: List<Flow>,
 ) {
   val perDay: Double get() = spent.toDouble() / max(1, selection.days)
   val basePerDay: Double? get() = baseSpent?.let { it.toDouble() / max(1, baseDays ?: 1) }
@@ -65,15 +67,18 @@ private fun shift(d: LocalDate, span: Span, n: Long): LocalDate = when (span) {
 
 private fun unitEnd(start: LocalDate, span: Span): LocalDate = shift(start, span, 1).minusDays(1)
 
+/** One day's totals, summed in SQL so the whole history costs one row per day, not one per payment. */
+data class DayTotal(val day: LocalDate, val spent: Long, val received: Long)
+
 /**
- * Every day from [first] to [today] with spend, income and its flows, plus prefix sums so any range
- * totals in O(1). Built once per ledger read off the main thread; selection changes only read it.
+ * Every day from [first] to [today] with spend and income, plus prefix sums so any range totals in
+ * O(1). Built from per-day totals, so it stays small however many payments the ledger holds: ten
+ * years is ~3,650 days. Payment-level detail (categories, biggest, …) is read per selection instead.
  */
-class Book(val first: LocalDate, val today: LocalDate, flows: List<Flow>) {
+class Book(val first: LocalDate, val today: LocalDate, days: List<DayTotal>) {
   val size: Int = ChronoUnit.DAYS.between(first, today).toInt() + 1
   private val spentDay = LongArray(size)
   private val receivedDay = LongArray(size)
-  private val byDay: Array<MutableList<Flow>> = Array(size) { mutableListOf() }
   private val spentSum = LongArray(size + 1)
   private val receivedSum = LongArray(size + 1)
   /** The first day anything was logged. Cells before it are drawn blank, not as "no spend". */
@@ -83,13 +88,12 @@ class Book(val first: LocalDate, val today: LocalDate, flows: List<Flow>) {
 
   init {
     var earliest: LocalDate? = null
-    for (f in flows) {
-      val d = Format.date(f.at)
-      val i = indexOf(d)
+    for (t in days) {
+      val i = indexOf(t.day)
       if (i !in 0 until size) continue
-      if (earliest == null || d.isBefore(earliest)) earliest = d
-      byDay[i].add(f)
-      if (f.direction == Direction.OUT) spentDay[i] += f.amount else receivedDay[i] += f.amount
+      if (earliest == null || t.day.isBefore(earliest)) earliest = t.day
+      spentDay[i] += t.spent
+      receivedDay[i] += t.received
     }
     firstData = earliest
     for (i in 0 until size) {
@@ -106,8 +110,6 @@ class Book(val first: LocalDate, val today: LocalDate, flows: List<Flow>) {
   fun indexOf(d: LocalDate): Int = ChronoUnit.DAYS.between(first, d).toInt()
 
   fun spentOn(d: LocalDate): Long = indexOf(d).let { if (it in 0 until size) spentDay[it] else 0 }
-
-  fun flowsOn(d: LocalDate): List<Flow> = indexOf(d).let { if (it in 0 until size) byDay[it] else emptyList() }
 
   /** -2 before any data, -1 in the future, 0 no spend, 1-4 heat. */
   fun level(d: LocalDate): Int {
@@ -174,11 +176,16 @@ class Book(val first: LocalDate, val today: LocalDate, flows: List<Flow>) {
     return b.takeIf { !it.first.start.isBefore(first) && (firstData == null || !it.first.end.isBefore(firstData)) }
   }
 
-  fun stats(sel: Selection): RangeStats {
+  /** [flows] are the selection's payments, oldest first (read for just this range, see BalanceCore.flows). */
+  fun stats(sel: Selection, flows: List<Flow>): RangeStats {
     val (a, b) = clampRange(sel.start, sel.end)
     val out = ArrayList<Flow>()
     val income = ArrayList<Flow>()
-    for (i in a..b) for (f in byDay[i]) if (f.direction == Direction.OUT) out.add(f) else income.add(f)
+    for (f in flows) {
+      val d = Format.date(f.at)
+      if (d.isBefore(sel.start) || d.isAfter(sel.end)) continue
+      if (f.direction == Direction.OUT) out.add(f) else income.add(f)
+    }
     val base = baseline(sel)
     val weekly = sel.days > 70
     val (cur, curDays) = series(sel.start, sel.end, weekly)
@@ -207,6 +214,7 @@ class Book(val first: LocalDate, val today: LocalDate, flows: List<Flow>) {
         readoutValues = cur.map(Format::rupiah),
       ),
       chartDays = curDays,
+      outFlows = out,
     )
   }
 
@@ -237,8 +245,12 @@ class Book(val first: LocalDate, val today: LocalDate, flows: List<Flow>) {
   }
 
   companion object {
-    /** Far enough back for the year view (53 weeks) and for comparing this year with last. */
-    fun firstDay(today: LocalDate): LocalDate = minOf(monday(today).minusWeeks(52), LocalDate.of(today.year - 1, 1, 1))
+    /**
+     * The whole history: back to [earliest] (the first day logged), and never less than a year and a
+     * bit, so a new ledger still has room for the year view and this-year-against-last.
+     */
+    fun firstDay(today: LocalDate, earliest: LocalDate?): LocalDate =
+      minOf(monday(today).minusWeeks(52), LocalDate.of(today.year - 1, 1, 1), earliest?.let(::monday) ?: today)
   }
 }
 

@@ -35,6 +35,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -42,6 +43,9 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -73,6 +77,8 @@ import id.sndyy.balancenative.ui.kit.ledgerState
 import id.sndyy.balancenative.ui.theme.Ember
 import id.sndyy.balancenative.ui.theme.Space
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -83,6 +89,8 @@ import kotlin.math.roundToInt
 
 data class OverviewData(
   val book: Book,
+  /** The details for what the map showed when this was read, so the screen opens complete. */
+  val stats: RangeStats,
   val empty: Boolean,
   val hasAccess: Boolean,
   val toCheck: Int,
@@ -92,22 +100,6 @@ data class OverviewData(
 
 class OverviewViewModel(app: Application) : AndroidViewModel(app) {
   private val core = app.balance.core
-
-  val state = viewModelScope.ledgerState {
-    val today = LocalDate.now()
-    val first = Book.firstDay(today)
-    val flows = core.flows(Format.startOfDayMs(first))
-    val waiting = runCatching { core.unparsed() }.getOrDefault(emptyList())
-    withContext(Dispatchers.Default) {
-      OverviewData(
-        book = Book(first, today, flows),
-        empty = flows.isEmpty(),
-        hasAccess = core.hasNotificationAccess(),
-        toCheck = waiting.size,
-        toCheckAmount = waiting.sumOf { w -> w.review?.takeIf { it.direction == Direction.OUT }?.amount ?: 0L },
-      )
-    }
-  }
 
   /**
    * How many weeks the map's right edge sits behind this week. Fractional while a finger or a fling
@@ -123,6 +115,26 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
   /** A tapped week, shown instead of the whole view until it's cleared or the map moves. */
   var focus by mutableStateOf<LocalDate?>(null)
     private set
+
+  val state = viewModelScope.ledgerState {
+    val today = LocalDate.now()
+    // Per-day totals for the whole history: what the map and every total read. Payments themselves
+    // are only read for the range on screen (see stats), so the cost stays flat as the ledger grows.
+    val days = core.dailyTotals()
+    val book = withContext(Dispatchers.Default) { Book(Book.firstDay(today, days.firstOrNull()?.day), today, days) }
+    val waiting = runCatching { core.unparsed() }.getOrDefault(emptyList())
+    val initial = stats(book, focus?.let { book.week(it) } ?: inView(book, settled))
+    withContext(Dispatchers.Default) {
+      OverviewData(
+        book = book,
+        stats = initial,
+        empty = days.isEmpty(),
+        hasAccess = core.hasNotificationAccess(),
+        toCheck = waiting.size,
+        toCheckAmount = waiting.sumOf { w -> w.review?.takeIf { it.direction == Direction.OUT }?.amount ?: 0L },
+      )
+    }
+  }
 
   private val rest = spring<Float>(dampingRatio = 0.9f, stiffness = Spring.StiffnessMediumLow)
 
@@ -148,7 +160,8 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
 
   suspend fun jump(book: Book, back: Float, done: Boolean) {
     focus = null
-    if (!done) { moving = true; pan.snapTo(back); return }
+    moving = true
+    if (!done) { pan.snapTo(back); return }
     val target = back.roundToInt().coerceIn(0, mapMaxBack(book))
     try {
       pan.animateTo(target.toFloat(), rest)
@@ -156,6 +169,12 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
       settled = target
       moving = false
     }
+  }
+
+  /** Totals come from the book; categories, biggest and the rest from this range's payments alone. */
+  suspend fun stats(book: Book, sel: Selection): RangeStats {
+    val flows = core.flows(Format.startOfDayMs(sel.start), Format.startOfDayMs(sel.end.plusDays(1)))
+    return withContext(Dispatchers.Default) { book.stats(sel, flows) }
   }
 
   fun tap(week: LocalDate) { focus = if (focus == week) null else week }
@@ -188,7 +207,9 @@ private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (Str
   val scope = rememberCoroutineScope()
   // The sections below follow where the map rests (or the focused week); the total follows the map live.
   val sel = vm.focus?.let { book.week(it) } ?: inView(book, vm.settled)
-  val stats = remember(book, sel) { book.stats(sel) }
+  // The last details stay up while the next range's payments are read, so nothing blinks empty.
+  var stats by remember(data) { mutableStateOf(data.stats) }
+  LaunchedEffect(data, sel) { if (stats.selection != sel) stats = vm.stats(book, sel) }
   var cursor by remember { mutableStateOf<LocalDate?>(null) }
   var highlight by remember(sel) { mutableStateOf<String?>(null) }
 
@@ -207,17 +228,35 @@ private fun Overview(data: OverviewData, vm: OverviewViewModel, onCategory: (Str
 
     MapHeader(data, book, vm, onCategory)
 
-    MapGrid(
-      book = book,
-      back = { vm.pan.value },
-      focus = vm.focus,
-      cursor = cursor,
-      onDrag = { scope.launch { vm.drag(book, it) } },
-      onRelease = { scope.launch { vm.release(book, it) } },
-      onTap = { Haptic.key(hostView); vm.tap(it) },
-      modifier = Modifier.padding(start = Space.page - MAP_PAD, end = Space.page - MAP_PAD, top = 12.dp),
-    )
-    MapRuler(book, { vm.pan.value }, onJump = { b, done -> scope.launch { vm.jump(book, b, done) } }, modifier = Modifier.padding(start = Space.page, end = Space.page, top = 14.dp))
+    // The ruler of every week is a scrollbar: it shows while the map moves and a moment after, floating
+    // over the top of what's below, so it takes no room at rest. Grab it while it's up to jump far.
+    val ruler by produceState(false) {
+      snapshotFlow { vm.moving }.collectLatest { m -> if (m) value = true else { delay(1500); value = false } }
+    }
+    Box(Modifier.zIndex(1f)) {
+      MapGrid(
+        book = book,
+        back = { vm.pan.value },
+        focus = vm.focus,
+        cursor = cursor,
+        onDrag = { scope.launch { vm.drag(book, it) } },
+        onRelease = { scope.launch { vm.release(book, it) } },
+        onTap = { Haptic.key(hostView); vm.tap(it) },
+        modifier = Modifier.padding(start = Space.page - MAP_PAD, end = Space.page - MAP_PAD, top = 12.dp),
+      )
+      androidx.compose.animation.AnimatedVisibility(
+        ruler,
+        Modifier.align(Alignment.BottomCenter).offset { IntOffset(0, RULER_HEIGHT.roundToPx()) },
+        enter = fadeIn(tween(120)),
+        exit = fadeOut(tween(260)),
+      ) {
+        MapRuler(
+          book, { vm.pan.value },
+          onJump = { b, done -> scope.launch { vm.jump(book, b, done) } },
+          modifier = Modifier.background(Ember.bg).padding(start = Space.page, end = Space.page, top = 8.dp),
+        )
+      }
+    }
 
     if (data.empty) {
       Label(
@@ -274,7 +313,7 @@ private fun MapHeader(data: OverviewData, book: Book, vm: OverviewViewModel, onC
       // No caption for the view itself: the map shows what's counted. A focused week says which one.
       AnimatedVisibility(vm.focus != null, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
         Row(Modifier.fillMaxWidth().height(24.dp), verticalAlignment = Alignment.CenterVertically) {
-          Label("Week of ${live.start.dayOfMonth} ${Format.shortMonth(live.start)}", Modifier.weight(1f), size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED, maxLines = 1)
+          Label("Week of ${live.start.dayOfMonth} ${Format.shortMonth(live.start)}${if (live.start.year != book.today.year) " ${live.start.year}" else ""}", Modifier.weight(1f), size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED, maxLines = 1)
           Label("×", Modifier.size(28.dp).clip(androidx.compose.foundation.shape.CircleShape).clickable { Haptic.key(hostView); vm.clearFocus() }
             .semantics { contentDescription = "Back to the whole view" }.padding(start = 9.dp, top = 2.dp), size = 17.sp, tone = Tone.MUTED)
         }
@@ -323,7 +362,7 @@ private fun Status(data: OverviewData, onOpen: () -> Unit) {
 private fun ChartSlot(book: Book, stats: RangeStats, onScrub: (Int?) -> Unit) {
   val height = 220.dp
   if (stats.selection.days == 1) {
-    val flows = book.flowsOn(stats.selection.start).filter { it.direction == Direction.OUT }
+    val flows = stats.outFlows
     Column(Modifier.fillMaxWidth().height(height).padding(start = Space.page, end = Space.page, top = 24.dp)) {
       if (flows.isEmpty()) Label("No spending this day.", size = 14.sp, tone = Tone.MUTED)
       flows.take(4).forEach {

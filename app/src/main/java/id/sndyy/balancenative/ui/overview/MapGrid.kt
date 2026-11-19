@@ -43,6 +43,9 @@ import kotlin.math.min
 const val MAP_WEEKS = 13
 private val MAP_GAP = 3.dp
 private val MAP_LABELS = 16.dp
+private val RULER_BODY = 34.dp
+/** The ruler's full height with its top padding: how far it hangs below the map. */
+val RULER_HEIGHT = RULER_BODY + 8.dp
 /** Breathing room inside the canvas so a focused week's rim is never cut at the edges. */
 val MAP_PAD = 5.dp
 
@@ -81,6 +84,7 @@ fun MapGrid(
 ) {
   val measurer = rememberTextMeasurer()
   val labelStyle = remember { TextStyle(fontFamily = Satoshi, fontWeight = FontWeight.Medium, fontSize = 10.sp, color = Ember.muted) }
+  val yearStyle = remember { labelStyle.copy(fontWeight = FontWeight.Bold, color = Ember.text) }
   val drag by rememberUpdatedState(onDrag)
   val release by rememberUpdatedState(onRelease)
   val tap by rememberUpdatedState(onTap)
@@ -126,10 +130,17 @@ fun MapGrid(
       fun xOf(k: Int) = pad + (k + frac) * pitch
 
       clipRect(0f, 0f, size.width, size.height) {
-        // Month names where a month's first week starts.
+        // Month names where a month's first week starts. January always carries its year, and so does
+        // the first label in view once the map is in another year, so the past never reads as this year.
+        var yearShown = false
         for (k in -1..MAP_WEEKS) {
           val m = mondayOf(k)
-          if (m.dayOfMonth <= 7) drawText(measurer.measure(Format.shortMonth(m), labelStyle), topLeft = Offset(xOf(k), 0f))
+          if (m.dayOfMonth > 7) continue
+          val x = xOf(k)
+          val withYear = m.monthValue == 1 || (!yearShown && x >= pad && m.year != book.today.year)
+          if (x >= pad) yearShown = true
+          val text = if (withYear) "${Format.shortMonth(m)} ${m.year}" else Format.shortMonth(m)
+          drawText(measurer.measure(text, if (withYear) yearStyle else labelStyle), topLeft = Offset(x, 0f))
         }
         for (k in -1..MAP_WEEKS) {
           val m = mondayOf(k)
@@ -181,6 +192,8 @@ fun MapGrid(
 @Composable
 fun MapRuler(book: Book, back: () -> Float, onJump: (back: Float, done: Boolean) -> Unit, modifier: Modifier = Modifier) {
   val jump by rememberUpdatedState(onJump)
+  val measurer = rememberTextMeasurer()
+  val yearStyle = remember { TextStyle(fontFamily = Satoshi, fontWeight = FontWeight.Medium, fontSize = 10.sp, color = Ember.muted) }
   val now = mapEnd(book)
   val first = dataWeek(book)
   val weeks = ((now.toEpochDay() - first.toEpochDay()) / 7).toInt() + 1
@@ -204,7 +217,7 @@ fun MapRuler(book: Book, back: () -> Float, onJump: (back: Float, done: Boolean)
   Canvas(
     modifier
       .fillMaxWidth()
-      .height(22.dp)
+      .height(RULER_BODY)
       .semantics { contentDescription = "All weeks. Tap to jump." }
       .pointerInput(book) {
         fun backAt(x: Float): Float {
@@ -226,11 +239,26 @@ fun MapRuler(book: Book, back: () -> Float, onJump: (back: Float, done: Boolean)
         ) { change, _ -> change.consume(); last = backAt(change.position.x); jump(last, false) }
       },
   ) {
-    val gap = 1.dp.toPx()
+    // Years of history make hundreds of weeks: past ~3dp a week the gaps go, and the cells touch.
+    val gap = if (size.width / weeks >= 3.dp.toPx()) 1.dp.toPx() else 0f
     val c = (size.width - gap * (weeks - 1)) / weeks
     val h = 10.dp.toPx()
-    val y = (size.height - h) / 2
-    for (w in 0 until weeks) drawRoundRect(Ember.heat[levels[w]], Offset(w * (c + gap), y), Size(c, h), CornerRadius(min(1.5.dp.toPx(), c / 2)))
+    val y = 5.dp.toPx()
+    for (w in 0 until weeks) {
+      val corner = if (gap > 0) CornerRadius(min(1.5.dp.toPx(), c / 2)) else CornerRadius.Zero
+      drawRoundRect(Ember.heat[levels[w]], Offset(w * (c + gap), y), Size(c, h), corner)
+    }
+    // Years under the bar, at the first week of each, skipped where they'd collide.
+    var freeFrom = 0f
+    for (w in 0 until weeks) {
+      val m = first.plusWeeks(w.toLong())
+      if (w != 0 && m.year == m.minusWeeks(1).year) continue
+      val label = measurer.measure(m.year.toString(), yearStyle)
+      val x = (w * (c + gap)).coerceAtMost(size.width - label.size.width)
+      if (x < freeFrom) continue
+      drawText(label, topLeft = Offset(x, y + h + 5.dp.toPx()))
+      freeFrom = x + label.size.width + 8.dp.toPx()
+    }
     // The window: the MAP_WEEKS weeks in view.
     val right = weeks - 1 - back()
     val left = right - (MAP_WEEKS - 1)

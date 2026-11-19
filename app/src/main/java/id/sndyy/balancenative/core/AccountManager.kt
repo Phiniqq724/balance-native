@@ -65,6 +65,8 @@ class AccountManager(context: Context, private val core: BalanceCore) {
    */
   suspend fun signInWithGoogle(activity: Activity): String? {
     if (!cloudConfigured || BuildConfig.GOOGLE_WEB_CLIENT_ID.isEmpty()) return "Google sign-in isn’t set up."
+    // Signing in merges this ledger into the account and syncs it: made-up rows must never reach Supabase.
+    if (BuildConfig.DEV_TOOLS && withContext(Dispatchers.IO) { DevSeed.count(app) } > 0) return "Remove the dummy data first."
     val credential = try {
       core.signInWithGoogle(activity, BuildConfig.GOOGLE_WEB_CLIENT_ID)
     } catch (e: BalanceException) {

@@ -125,9 +125,8 @@ class ActivityViewModel(app: Application) : AndroidViewModel(app) {
   /** Daily spend for the week strip, read on its own so filters and search never rebuild it. */
   val heat = viewModelScope.ledgerState {
     val today = LocalDate.now()
-    val first = Book.firstDay(today)
-    val flows = core.flows(Format.startOfDayMs(first))
-    withContext(Dispatchers.Default) { Book(first, today, flows) }
+    val days = core.dailyTotals()
+    withContext(Dispatchers.Default) { Book(Book.firstDay(today, days.firstOrNull()?.day), today, days) }
   }
 
   init {

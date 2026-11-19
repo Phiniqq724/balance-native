@@ -7,9 +7,11 @@ import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
 import android.provider.Settings as AndroidSettings
+import id.sndyy.balancenative.BuildConfig
 import id.sndyy.balancenative.data.ActivityPage
 import id.sndyy.balancenative.data.ActivityQuery
 import id.sndyy.balancenative.data.AiKind
+import id.sndyy.balancenative.data.DayTotal
 import id.sndyy.balancenative.data.Apps
 import id.sndyy.balancenative.data.Category
 import id.sndyy.balancenative.data.Direction
@@ -22,6 +24,7 @@ import id.sndyy.balancenative.data.Transaction
 import id.sndyy.balancenative.data.Unparsed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 import java.util.UUID
 
 /**
@@ -182,12 +185,25 @@ class BalanceCore(context: Context) {
     return ActivityPage(rows, total, spent, received, hasMore = rows.size < total)
   }
 
-  suspend fun flows(fromMs: Long): List<Flow> = read(
+  /**
+   * Spend and income per local day over the whole ledger, summed by SQLite. The result is one row per
+   * day with activity, so it stays a few thousand rows however many payments there are.
+   */
+  suspend fun dailyTotals(): List<DayTotal> = read(
+    """SELECT date(occurred_at / 1000, 'unixepoch', 'localtime') AS day,
+              SUM(CASE WHEN direction = 'in' THEN 0 ELSE amount END) AS spent,
+              SUM(CASE WHEN direction = 'in' THEN amount ELSE 0 END) AS received
+       FROM transactions WHERE is_transfer = 0
+       GROUP BY day ORDER BY day""",
+  ) { DayTotal(LocalDate.parse(it.getString(0)), it.getLong(1), it.getLong(2)) }
+
+  /** Payments in [fromMs, toMs), oldest first. Ranges stay small (a selection), and occurred_at is indexed. */
+  suspend fun flows(fromMs: Long, toMs: Long): List<Flow> = read(
     """SELECT t.direction, t.amount, t.category_id, c.name AS category_name, t.counterparty, t.bank_category, t.source, t.occurred_at
        FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.is_transfer = 0 AND t.occurred_at >= ?
+       WHERE t.is_transfer = 0 AND t.occurred_at >= ? AND t.occurred_at < ?
        ORDER BY t.occurred_at""",
-    listOf(fromMs),
+    listOf(fromMs, toMs),
   ) {
     Flow(
       direction = Direction.of(it.str("direction")),
@@ -359,6 +375,23 @@ class BalanceCore(context: Context) {
   }
 
   private fun importLabels(d: BalanceDb): Map<String, String> = d.watchedPackages().associateWith { sourceLabel(it) }
+
+  // ---- Dev tools (dev and fast builds) ----
+
+  suspend fun dummyCount(): Int = withContext(Dispatchers.IO) { DevSeed.count(db) }
+
+  /** Adds [count] made-up rows. Local mode only, so none of it can reach the cloud. Returns (rows, ms). */
+  suspend fun seedDummy(count: Int): Pair<Int, Long> {
+    check(BuildConfig.DEV_TOOLS) { "Dev tools are off in this build" }
+    val started = System.nanoTime()
+    val added = write { d ->
+      check(Account.userId(app) == Account.LOCAL) { "Dummy data is local mode only" }
+      DevSeed.seed(d, count)
+    }
+    return added to (System.nanoTime() - started) / 1_000_000
+  }
+
+  suspend fun clearDummy(): Int = write { d -> DevSeed.clear(d) }
 
   data class AiKeyInfo(val provider: String, val last4: String, val status: String?)
   data class ImportResult(val added: Int, val existing: Int, val newCategories: Int)
