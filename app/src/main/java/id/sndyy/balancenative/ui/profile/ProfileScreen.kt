@@ -6,6 +6,17 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import id.sndyy.balancenative.core.ProfileView
+import id.sndyy.balancenative.ui.kit.Haptic
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -128,13 +139,16 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
   var creating by remember { mutableStateOf(false) }
   var pickingApps by remember { mutableStateOf(false) }
   var keySheet by remember { mutableStateOf(false) }
+  var profileSheet by remember { mutableStateOf(false) }
+  val profile by context.balance.profiles.state.collectAsState()
+  LaunchedEffect(accountState) { context.balance.profiles.load(accountState) }
 
   val data = (state as? Loaded.Ready)?.data ?: return Loading()
   val appByPackage = apps.associateBy { it.packageName }
   fun label(pkg: String) = appByPackage[pkg]?.label ?: core.sourceLabel(pkg)
 
   Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding()) {
-    Header(accountState)
+    Header(accountState, profile) { profileSheet = true }
     Summary(data)
 
     SectionHead("Categories")
@@ -175,22 +189,48 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
   }
   if (pickingApps) AppPicker(apps, data.watched, onClose = { pickingApps = false }) { next -> scope.launch { core.setWatchedPackages(next) } }
   if (keySheet) AiKeySheet(data.aiKey) { keySheet = false }
+  profile?.let { p -> if (profileSheet) ProfileSheet(p, (accountState as? AccountState.Signed)?.user?.email) { profileSheet = false } }
 }
 
+/**
+ * Photo (or Mosaic), name and where the profile lives. The whole row opens the edit sheet and sinks a
+ * dp under the finger; the Edit pill just says so.
+ */
 @Composable
-private fun Header(state: AccountState) {
-  val (name, detail) = when (state) {
-    is AccountState.Signed -> (state.user.name ?: state.user.email ?: "You") to (state.user.email ?: "Google")
-    else -> "This phone" to "Nothing leaves it"
-  }
-  Row(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-    Box(Modifier.size(52.dp).clip(RoundedCornerShape(18.dp)).background(Ember.raised), contentAlignment = Alignment.Center) {
-      Label(name.take(1).uppercase(), size = 22.sp, weight = FontWeight.Bold)
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+private fun Header(state: AccountState, profile: ProfileView?, onEdit: () -> Unit) {
+  val signed = state as? AccountState.Signed
+  val name = profile?.username?.let { "@$it" } ?: signed?.user?.name ?: signed?.user?.email ?: "This phone"
+  val detail = if (signed != null) "Synced with Google" else "Nothing leaves it"
+  val view = LocalView.current
+  val source = remember { MutableInteractionSource() }
+  val pressed by source.collectIsPressedAsState()
+  val press by animateFloatAsState(if (pressed) 1f else 0f, spring(stiffness = Spring.StiffnessHigh), label = "headerPress")
+  val sink = with(LocalDensity.current) { 1.dp.toPx() }
+  Row(
+    Modifier
+      .fillMaxWidth()
+      .padding(start = Space.page - 8.dp, end = Space.page - 8.dp, top = 20.dp)
+      .graphicsLayer { translationY = press * sink }
+      .clip(RoundedCornerShape(24.dp))
+      .clickable(enabled = profile != null, interactionSource = source, indication = null, role = Role.Button, onClickLabel = "Edit profile") {
+        Haptic.key(view)
+        onEdit()
+      }
+      .padding(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(14.dp),
+  ) {
+    Avatar(profile?.shown, profile?.seed ?: "", 60.dp)
+    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
       Label(name, size = 22.sp, weight = FontWeight.Bold, maxLines = 1)
       Label(detail, size = 13.sp, tone = Tone.MUTED, maxLines = 1)
     }
+    Label(
+      "Edit",
+      Modifier.clip(RoundedCornerShape(50)).background(Ember.raised).padding(horizontal = 13.dp, vertical = 7.dp),
+      size = 13.sp,
+      weight = FontWeight.Medium,
+    )
   }
 }
 

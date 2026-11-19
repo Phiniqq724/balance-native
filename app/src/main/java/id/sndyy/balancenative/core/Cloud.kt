@@ -93,10 +93,15 @@ internal object Cloud {
     return check(res).body
   }
 
-  /** Uploads to Storage, replacing what's there. */
-  fun upload(context: Context, userId: String, bucket: String, path: String, bytes: ByteArray, contentType: String) {
-    val headers = CloudAuth.headers(context, session(context, userId)) + ("x-upsert" to "true")
+  /** Uploads to Storage. [upsert] replaces what's there, which needs an update policy on the bucket. */
+  fun upload(context: Context, userId: String, bucket: String, path: String, bytes: ByteArray, contentType: String, upsert: Boolean = true) {
+    val headers = CloudAuth.headers(context, session(context, userId)) + ("x-upsert" to upsert.toString())
     check(CloudHttp.request("POST", "${url(context)}/storage/v1/object/$bucket/$path", headers, null, contentType = contentType, bytes = bytes))
+  }
+
+  /** Deletes one object from Storage. */
+  fun remove(context: Context, userId: String, bucket: String, path: String) {
+    check(CloudHttp.request("DELETE", "${url(context)}/storage/v1/object/$bucket/$path", CloudAuth.headers(context, session(context, userId))))
   }
 
   /** A short-lived URL for a private object. */

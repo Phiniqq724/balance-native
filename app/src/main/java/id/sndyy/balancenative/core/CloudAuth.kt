@@ -15,6 +15,14 @@ internal object CloudHttp {
     .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
     .build()
 
+  /** GET [url] as bytes (photos). Throws [IOException] on a network failure or a non-2xx status. */
+  fun download(url: String): ByteArray {
+    client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { res ->
+      if (!res.isSuccessful) throw IOException("download ${res.code}")
+      return res.body.bytes()
+    }
+  }
+
   /** POSTs [json]. Network failures throw [IOException]; any HTTP status comes back as a result. */
   fun post(url: String, headers: Map<String, String>, json: String, timeoutMs: Int): HttpResult =
     request("POST", url, headers, json, timeoutMs)
