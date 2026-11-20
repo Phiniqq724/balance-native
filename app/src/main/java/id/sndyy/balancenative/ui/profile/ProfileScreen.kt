@@ -2,6 +2,13 @@ package id.sndyy.balancenative.ui.profile
 
 import android.app.Activity
 import android.app.Application
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.material3.Icon
+import androidx.compose.ui.res.painterResource
+import id.sndyy.balancenative.R
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -186,7 +193,8 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
       Group { DevRows(accountState) }
     }
 
-    Spacer(Modifier.height(140.dp))
+    MadeBy()
+    Spacer(Modifier.height(Space.navClearance))
   }
 
   if (creating || editing != null) {
@@ -238,6 +246,44 @@ private fun Header(state: AccountState, profile: ProfileView?, onEdit: () -> Uni
     )
   }
 }
+
+/**
+ * The sign-off at the very bottom: the SNDYY wordmark in muted ink over the version. The mark opens the
+ * portfolio and sinks a dp under the finger, like every other press in the app.
+ */
+@Composable
+private fun MadeBy() {
+  val context = LocalContext.current
+  val view = LocalView.current
+  val source = remember { MutableInteractionSource() }
+  val pressed by source.collectIsPressedAsState()
+  val press by animateFloatAsState(if (pressed) 1f else 0f, spring(stiffness = Spring.StiffnessHigh), label = "madeByPress")
+  val sink = with(LocalDensity.current) { 1.dp.toPx() }
+  Column(
+    Modifier.fillMaxWidth().padding(top = Space.section + 16.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(10.dp),
+  ) {
+    Column(
+      Modifier
+        .graphicsLayer { translationY = press * sink; alpha = 1f - press * 0.25f }
+        .clip(RoundedCornerShape(12.dp))
+        .clickable(interactionSource = source, indication = null, role = Role.Button, onClickLabel = "Open sndyy.id") {
+          Haptic.key(view)
+          runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PORTFOLIO))) }
+        }
+        .padding(horizontal = 16.dp, vertical = 10.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Label("Made by", size = 12.sp, tone = Tone.MUTED)
+      Icon(painterResource(R.drawable.sndyy_logo), contentDescription = "SNDYY", tint = Ember.muted, modifier = Modifier.height(16.dp).aspectRatio(3482f / 690f))
+    }
+    Label("Balance ${BuildConfig.VERSION_NAME}", size = 11.sp, tone = Tone.MUTED)
+  }
+}
+
+private const val PORTFOLIO = "https://www.sndyy.id"
 
 /** A soft panel holding related rows: grouping by surface instead of dividers. */
 @Composable
@@ -471,6 +517,15 @@ private fun DevRows(state: AccountState) {
   }
 }
 
+private const val WORKING = "Working…"
+
+/** The Activity behind a Compose context, unwrapping ContextWrappers (a themed or localised context isn't one). */
+tailrec fun Context.findActivity(): Activity? = when (this) {
+  is Activity -> this
+  is ContextWrapper -> baseContext.findActivity()
+  else -> null
+}
+
 @Composable
 private fun AccountRows(state: AccountState) {
   val context = LocalContext.current
@@ -492,13 +547,19 @@ private fun AccountRows(state: AccountState) {
         },
         tone = Tone.TEXT,
       ) { SyncWorker.request(context, 0) }
-      SettingsRow("Use this phone only", status = note, statusTone = Tone.DANGER) { asking = "local" }
+      SettingsRow("Use this phone only", status = note, statusTone = if (note == WORKING) Tone.MUTED else Tone.DANGER, onPress = if (note == WORKING) null else ({ asking = "local" }))
       SettingsRow("Sign out", tone = Tone.DANGER) { asking = "signOut" }
     }
     else -> {
-      SettingsRow("Connect Google", "Back up and sync", status = note, statusTone = Tone.DANGER) {
-        scope.launch { note = account.signInWithGoogle(context as Activity) }
-      }
+      // One sign-in at a time: a second tap while the Google sheet is coming up would start another.
+      val busy = note == WORKING
+      SettingsRow("Connect Google", "Back up and sync", status = note, statusTone = if (busy) Tone.MUTED else Tone.DANGER, onPress = if (busy) null else ({
+        val activity = context.findActivity()
+        if (activity == null) note = "Couldn’t reach Google." else {
+          note = WORKING
+          scope.launch { note = account.signInWithGoogle(activity) }
+        }
+      }))
     }
   }
 
@@ -511,7 +572,7 @@ private fun AccountRows(state: AccountState) {
       confirmButton = {
         TextButton(onClick = {
           asking = null
-          note = "Working…"
+          note = WORKING
           scope.launch { note = if (what == "local") account.switchToLocal() else { account.signOut(); null } }
         }) { Label(if (what == "local") "Switch" else "Sign out", weight = FontWeight.Bold, tone = Tone.DANGER) }
       },

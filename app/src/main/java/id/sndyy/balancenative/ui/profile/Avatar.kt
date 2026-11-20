@@ -42,7 +42,7 @@ private object Photos {
   fun peek(file: File): ImageBitmap? = cache.get(key(file))
 
   suspend fun load(file: File): ImageBitmap? = peek(file) ?: withContext(Dispatchers.IO) {
-    BitmapFactory.decodeFile(file.path)?.asImageBitmap()?.also { cache.put(key(file), it) }
+    runCatching { BitmapFactory.decodeFile(file.path) }.getOrNull()?.asImageBitmap()?.also { cache.put(key(file), it) }
   }
 }
 
@@ -52,15 +52,25 @@ private object Photos {
  */
 @Composable
 fun Avatar(file: File?, seed: String, size: Dp, modifier: Modifier = Modifier, bitmap: ImageBitmap? = null) {
-  val loaded by produceState(file?.let(Photos::peek), file) { value = file?.let { Photos.load(it) } }
-  val image = bitmap ?: loaded
+  // Loading: the photo, still unknown. Failed: a file that won't decode (half-written, deleted under us),
+  // which falls back to the Mosaic instead of leaving an empty tile for good.
+  val loaded by produceState<PhotoLoad>(file?.let(Photos::peek)?.let(PhotoLoad::Ready) ?: PhotoLoad.Loading, file) {
+    value = file?.let { Photos.load(it) }?.let(PhotoLoad::Ready) ?: PhotoLoad.Failed
+  }
+  val image = bitmap ?: (loaded as? PhotoLoad.Ready)?.image
   Box(modifier.size(size).clip(avatarShape(size)).background(Ember.raised)) {
     if (image != null) {
       Image(image, contentDescription = "Profile photo", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-    } else if (file == null) {
+    } else if (file == null || loaded == PhotoLoad.Failed) {
       Mosaic(seed, Modifier.fillMaxSize())
     }
   }
+}
+
+private sealed interface PhotoLoad {
+  data object Loading : PhotoLoad
+  data object Failed : PhotoLoad
+  class Ready(val image: ImageBitmap) : PhotoLoad
 }
 
 private val EMPTY = Color(0xFF332C27)
