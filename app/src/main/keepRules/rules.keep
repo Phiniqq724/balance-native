@@ -1,12 +1,9 @@
-# Add project specific R8 rules here.
-# AGP will combine all keep rule files in src/main/keepRules to pass to R8
-#
-# For more details, see
-#   https://d.android.com/r/tools/r8/keep-rules
+# Project R8 rules. AGP combines every file in src/main/keepRules and passes it to R8.
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Glance runs widget ActionCallbacks by reflection (class name -> no-arg constructor). Glance's own rule
+# keeps the class but not its constructor, so R8 dropped it and the Month Pulse period pill did nothing
+# in release and fast builds. Keep the constructor (and onAction's name, for stack traces).
+-keep class * implements androidx.glance.appwidget.action.ActionCallback {
+    public <init>();
+    public *** onAction(...);
+}
