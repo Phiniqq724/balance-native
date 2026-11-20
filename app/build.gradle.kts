@@ -35,6 +35,18 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Release key from local.properties (balance.release.*). Without it (CI) release falls back to the
+    // debug key, so assembleRelease still works; a build for people to install needs the real one.
+    val releaseStore = local.getProperty("balance.release.storeFile")?.let(::file)?.takeIf { it.exists() }
+    signingConfigs {
+        if (releaseStore != null) create("release") {
+            storeFile = releaseStore
+            storePassword = local.getProperty("balance.release.storePassword")
+            keyAlias = local.getProperty("balance.release.keyAlias")
+            keyPassword = local.getProperty("balance.release.keyPassword")
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".dev"
@@ -43,6 +55,7 @@ android {
         release {
             resValue("string", "app_name", "Balance Native")
             buildConfigField("boolean", "DEV_TOOLS", "false")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "src/main/keepRules/rules.keep")
