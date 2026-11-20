@@ -85,6 +85,11 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 
+/** A choice inside a sheet: raised so it stands off the sheet's own surface, and still under the finger. */
+@Composable
+private fun FormChip(label: String, selected: Boolean, onPress: () -> Unit) =
+  Chip(label, selected, face = Ember.raised, grow = false, onPress = onPress)
+
 @Composable
 fun primaryButtonColors() = ButtonDefaults.buttonColors(containerColor = Ember.text, contentColor = Ember.bg)
 
@@ -128,7 +133,7 @@ fun TxSheet(tx: Transaction, categories: List<Category>, label: (String) -> Stri
       Label("Category", size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
       FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         (categories.map { it.id to it.name } + (null to "None")).forEach { (id, name) ->
-          Chip(name, categoryId == id) {
+          FormChip(name, categoryId == id) {
             val previous = categoryId
             categoryId = id
             scope.launch { runCatching { core.setCategory(tx.id, id) }.onFailure { categoryId = previous; error = "Couldn't save the category." } }
@@ -294,7 +299,7 @@ private fun FixSheet(start: Verdict?, onClose: () -> Unit, onSave: (Verdict) -> 
     Label("What was it?", size = 22.sp, weight = FontWeight.Bold)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
       listOf(AiKind.EXPENSE to "Spent", AiKind.INCOME to "Received", AiKind.TRANSFER to "Own accounts").forEach { (k, l) ->
-        Chip(l, kind == k) {
+        FormChip(l, kind == k) {
           kind = k
           if (k == AiKind.EXPENSE) direction = Direction.OUT
           if (k == AiKind.INCOME) direction = Direction.IN
@@ -303,8 +308,8 @@ private fun FixSheet(start: Verdict?, onClose: () -> Unit, onSave: (Verdict) -> 
     }
     AnimatedVisibility(kind == AiKind.TRANSFER) {
       Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Chip("Out", direction == Direction.OUT) { direction = Direction.OUT }
-        Chip("In", direction == Direction.IN) { direction = Direction.IN }
+        FormChip("Out", direction == Direction.OUT) { direction = Direction.OUT }
+        FormChip("In", direction == Direction.IN) { direction = Direction.IN }
       }
     }
     Field(amount, { amount = amountInput(it) }, "Amount (Rp)", Modifier.fillMaxWidth(), KeyboardType.Number, RupiahGrouping)
@@ -340,8 +345,8 @@ fun NewTxSheet(onClose: () -> Unit) {
   Sheet(onClose) {
     Label("New transaction", size = 22.sp, weight = FontWeight.Bold)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-      Chip("Spent", direction == Direction.OUT) { direction = Direction.OUT }
-      Chip("Received", direction == Direction.IN) { direction = Direction.IN }
+      FormChip("Spent", direction == Direction.OUT) { direction = Direction.OUT }
+      FormChip("Received", direction == Direction.IN) { direction = Direction.IN }
     }
     // The amount is the point of the sheet, so it's typed big, grouped as you go, in the color of its direction.
     Field(
@@ -353,7 +358,7 @@ fun NewTxSheet(onClose: () -> Unit) {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Label("Category", size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-          categories.forEach { c -> Chip(c.name, categoryId == c.id) { categoryId = if (categoryId == c.id) null else c.id } }
+          categories.forEach { c -> FormChip(c.name, categoryId == c.id) { categoryId = if (categoryId == c.id) null else c.id } }
         }
       }
     }

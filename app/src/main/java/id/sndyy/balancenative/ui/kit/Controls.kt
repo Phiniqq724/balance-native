@@ -41,15 +41,25 @@ import id.sndyy.balancenative.ui.theme.Satoshi
  * A filter or category chip, cut like a large cell (6dp corners). Selected is ink. A press sinks it a
  * dp, darkens the face and swells its padding on a spring, so neighbours in a row get nudged aside:
  * the same squeeze as the nav, for rows that scroll instead of sharing a width.
+ *
+ * [face] is the resting fill: it has to differ from what the chip sits on, or an unselected chip reads
+ * as plain text. [grow] off keeps the size still (forms, where a row of choices shouldn't shuffle).
  */
 @Composable
-fun Chip(label: String, selected: Boolean, modifier: Modifier = Modifier, onPress: () -> Unit) {
+fun Chip(
+  label: String,
+  selected: Boolean,
+  modifier: Modifier = Modifier,
+  face: Color = Ember.surface,
+  grow: Boolean = true,
+  onPress: () -> Unit,
+) {
   val view = LocalView.current
   val source = remember { MutableInteractionSource() }
   val pressed by source.collectIsPressedAsState()
-  val bg by animateColorAsState(if (selected) Ember.text else Ember.surface, label = "chipBg")
+  val bg by animateColorAsState(if (selected) Ember.text else face, label = "chipBg")
   val fg by animateColorAsState(if (selected) Ember.bg else Ember.text, label = "chipFg")
-  val pad by animateDpAsState(if (pressed) 20.dp else 14.dp, spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMediumLow), label = "chipPad")
+  val pad by animateDpAsState(if (pressed && grow) 20.dp else 14.dp, spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMediumLow), label = "chipPad")
   val sink by animateFloatAsState(if (pressed) 1f else 0f, spring(stiffness = Spring.StiffnessHigh), label = "chipSink")
   val density = LocalDensity.current
   Label(
