@@ -81,10 +81,14 @@ fun Rule(modifier: Modifier = Modifier) {
  * up to its new number, so a change reads as motion rather than a jump.
  */
 @Composable
-fun Money(value: Long, modifier: Modifier = Modifier, size: TextUnit = 46.sp, sign: String = "", color: Color = Ember.text) {
+fun Money(value: Long, modifier: Modifier = Modifier, size: TextUnit = 46.sp, sign: String = "", color: Color = Ember.text, animate: Boolean = true) {
   val anim = remember { Animatable(value.toFloat()) }
-  LaunchedEffect(value) { anim.animateTo(value.toFloat(), tween(650, easing = FastOutSlowInEasing)) }
-  val shown = anim.value.toLong()
+  // While a finger drives the value (dragging a range) it is a direct readout: no count-up.
+  LaunchedEffect(value, animate) {
+    if (animate) anim.animateTo(value.toFloat(), tween(650, easing = FastOutSlowInEasing)) else anim.snapTo(value.toFloat())
+  }
+  // Floats lose rupiah above ~16 million, so the settled number is always the exact value.
+  val shown = if (anim.isRunning) anim.value.toLong() else value
   Text(
     text = buildAnnotatedString {
       withStyle(SpanStyle(color = Ember.muted, fontSize = size * 0.42f, fontWeight = FontWeight.Medium)) { append("Rp ") }
@@ -99,14 +103,15 @@ fun Money(value: Long, modifier: Modifier = Modifier, size: TextUnit = 46.sp, si
   )
 }
 
+/** Sections are set apart by space and a heavier title, never by rules. */
 @Composable
 fun SectionHead(title: String, detail: String? = null, modifier: Modifier = Modifier) {
-  Column(modifier.fillMaxWidth().padding(top = 40.dp, bottom = 16.dp)) {
-    Rule()
-    Row(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-      Label(title, Modifier.weight(1f), weight = FontWeight.Bold)
-      if (detail != null) Label(detail, size = 13.sp, tone = Tone.MUTED)
-    }
+  Row(
+    modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 44.dp, bottom = 14.dp),
+    verticalAlignment = Alignment.Bottom,
+  ) {
+    Label(title, Modifier.weight(1f), size = 18.sp, weight = FontWeight.Bold)
+    if (detail != null) Label(detail, size = 13.sp, tone = Tone.MUTED)
   }
 }
 

@@ -11,6 +11,15 @@ import android.net.Uri
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.work.Constraints
+import androidx.work.CoroutineWorker
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
+import androidx.work.workDataOf
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import org.json.JSONObject
 
@@ -79,7 +88,7 @@ internal object ReviewNotifier {
     }
     if (recentOnly && System.currentTimeMillis() - item.postedAt > RECENT_MS) return
     if (!enabled(app, db)) return
-    post(app, item)
+    post(app, item, lockScreenDetails = db.getSetting(Settings.LOCK_SCREEN_DETAILS) == "1")
   }
 
   /** Cancels every notification of ours whose item was answered or went away. */
@@ -175,7 +184,11 @@ internal object ReviewNotifier {
     }
   }
 
-  private fun post(context: Context, item: Item) {
+  /**
+   * [lockScreenDetails] off: the notification stays off the lock screen entirely (SECRET), since it repeats a
+   * bank's amounts and names, and some banks keep their own notification off it. Unlocked, it shows in full.
+   */
+  private fun post(context: Context, item: Item, lockScreenDetails: Boolean) {
     ensureChannel(context)
     val id = item.rawId.toInt()
     val title = if (item.suggestion) question(item) else if (item.kind == "ad_or_other") "Not a transaction?" else "Not sure about this one"
@@ -195,6 +208,7 @@ internal object ReviewNotifier {
       .setAutoCancel(true)
       .setOnlyAlertOnce(true)
       .setGroup(GROUP)
+      .setVisibility(if (lockScreenDetails) NotificationCompat.VISIBILITY_PRIVATE else NotificationCompat.VISIBILITY_SECRET)
       .setContentIntent(open(context, "balancenative://activity?f=review", id * 4))
     if (item.suggestion && item.kind != "ad_or_other") builder.addAction(0, "Yes", answer(context, ACTION_YES, item.rawId, id * 4 + 1))
     builder.addAction(0, "Not money", answer(context, ACTION_NOT_MONEY, item.rawId, id * 4 + 2))
@@ -295,23 +309,47 @@ class ReviewActionReceiver : BroadcastReceiver() {
     upload(context, owner, text.orEmpty(), if (yes) item else null)
   }
 
-  /** Best effort: a failed upload only means the model learns less. */
+  /** Handed to a worker: a token refresh in progress could otherwise hold this receiver past its time. */
   private fun upload(context: Context, owner: String, text: String, suggestion: ReviewNotifier.Item?) {
-    runCatching {
-      val url = Account.cloudUrl(context) ?: return
-      val session = CloudAuth.session(context, owner, 6_000) ?: return
-      val body = JSONObject()
-        .put("text", text)
-        .put("kind", suggestion?.kind ?: "ad_or_other")
-        .put("direction", suggestion?.direction ?: "out")
-        .put("amount", suggestion?.amount ?: 0L)
-        .put("counterparty", suggestion?.counterparty?.trim()?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
-      CloudHttp.post(
-        "$url/rest/v1/ai_examples",
-        CloudAuth.headers(context, session) + ("Prefer" to "return=minimal"),
-        body.toString(),
-        6_000
-      )
+    if (owner == Account.LOCAL) return // No account to teach.
+    val body = JSONObject()
+      .put("text", text)
+      .put("kind", suggestion?.kind ?: "ad_or_other")
+      .put("direction", suggestion?.direction ?: "out")
+      .put("amount", suggestion?.amount ?: 0L)
+      .put("counterparty", suggestion?.counterparty?.trim()?.takeIf { it.isNotEmpty() } ?: JSONObject.NULL)
+    runCatching { ExampleUploadWorker.enqueue(context, owner, body) }
+  }
+}
+
+/** Sends one answer to ai_examples. Best effort: a failed upload only means the model learns less. */
+internal class ExampleUploadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+  override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    val owner = inputData.getString(OWNER) ?: return@withContext Result.success()
+    val body = inputData.getString(BODY) ?: return@withContext Result.success()
+    // Signed out or switched since the answer: it belongs to an account that is no longer here.
+    if (Account.userId(applicationContext) != owner) return@withContext Result.success()
+    val url = Account.cloudUrl(applicationContext) ?: return@withContext Result.success()
+    try {
+      val session = CloudAuth.session(applicationContext, owner) ?: return@withContext Result.success()
+      val res = CloudHttp.post("$url/rest/v1/ai_examples", CloudAuth.headers(applicationContext, session) + ("Prefer" to "return=minimal"), body, 30_000)
+      if (res.code >= 500 && runAttemptCount < MAX_RETRIES) Result.retry() else Result.success()
+    } catch (_: java.io.IOException) {
+      if (runAttemptCount < MAX_RETRIES) Result.retry() else Result.success()
+    }
+  }
+
+  companion object {
+    private const val OWNER = "owner"
+    private const val BODY = "body"
+    private const val MAX_RETRIES = 3
+
+    fun enqueue(context: Context, owner: String, body: JSONObject) {
+      val request = OneTimeWorkRequestBuilder<ExampleUploadWorker>()
+        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+        .setInputData(workDataOf(OWNER to owner, BODY to body.toString()))
+        .build()
+      WorkManager.getInstance(context.applicationContext).enqueue(request)
     }
   }
 }

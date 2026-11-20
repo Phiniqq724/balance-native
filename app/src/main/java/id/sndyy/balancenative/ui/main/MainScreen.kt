@@ -2,6 +2,9 @@ package id.sndyy.balancenative.ui.main
 
 import android.view.HapticFeedbackConstants
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -27,9 +30,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.Person
-import androidx.compose.material.icons.rounded.ReceiptLong
-import androidx.compose.material.icons.rounded.ShowChart
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -48,6 +48,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
+import androidx.annotation.DrawableRes
+import id.sndyy.balancenative.R
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
@@ -62,6 +65,8 @@ import id.sndyy.balancenative.ui.activity.NewTxSheet
 import id.sndyy.balancenative.ui.kit.Label
 import id.sndyy.balancenative.ui.kit.ledgerTicks
 import id.sndyy.balancenative.ui.kit.rememberPressScale
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import id.sndyy.balancenative.ui.overview.OverviewScreen
 import id.sndyy.balancenative.ui.profile.ProfileScreen
 import id.sndyy.balancenative.ui.theme.Ember
@@ -69,13 +74,33 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
-private data class Tab(val label: String, val icon: ImageVector)
+/** Outlined at rest, filled when the tab is the one you're on. */
+// Material Symbols Rounded, which (unlike the old icon set) has a true filled form of each glyph.
+private data class Tab(val label: String, @DrawableRes val icon: Int, @DrawableRes val active: Int)
 
 private val TABS = listOf(
-  Tab("Overview", Icons.Rounded.ShowChart),
-  Tab("Activity", Icons.Rounded.ReceiptLong),
-  Tab("Profile", Icons.Rounded.Person),
+  Tab("Overview", R.drawable.sym_insights, R.drawable.sym_insights_fill),
+  Tab("Activity", R.drawable.sym_receipt_long, R.drawable.sym_receipt_long_fill),
+  Tab("Profile", R.drawable.sym_person, R.drawable.sym_person_fill),
 )
+
+/** The tab icon fills when it becomes active, with a small spring pop; leaving it just fades back to outline. */
+@Composable
+private fun TabIcon(tab: Tab, focused: Boolean, tint: androidx.compose.ui.graphics.Color) {
+  AnimatedContent(
+    targetState = focused,
+    transitionSpec = {
+      if (targetState) {
+        (fadeIn(tween(120)) + scaleIn(spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMedium), initialScale = 0.7f)) togetherWith fadeOut(tween(90))
+      } else {
+        fadeIn(tween(120)) togetherWith fadeOut(tween(90))
+      }
+    },
+    label = "tabIcon",
+  ) { on ->
+    Icon(ImageVector.vectorResource(if (on) tab.active else tab.icon), tab.label, tint = tint, modifier = Modifier.size(24.dp))
+  }
+}
 
 /** Swipeable pages with a floating pill of tabs; the add button rides beside it on Activity only. */
 @Composable
@@ -123,18 +148,25 @@ fun MainScreen(landing: MutableStateFlow<Landing?>) {
 @Composable
 private fun FloatingBar(selected: Int, toCheck: Int, showAdd: Boolean, onSelect: (Int) -> Unit, onAdd: () -> Unit, modifier: Modifier) {
   val view = LocalView.current
-  Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+  Row(modifier, verticalAlignment = Alignment.CenterVertically) {
     Surface(color = Ember.raised, shape = RoundedCornerShape(28.dp), shadowElevation = 8.dp) {
       Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+        // Counted-style squeeze on a bar that hugs its content: the pressed tab gains padding and its
+        // neighbours give some up, all on one spring, so the pill breathes instead of scaling.
+        val sources = remember { List(TABS.size) { MutableInteractionSource() } }
+        val down = sources.map { it.collectIsPressedAsState().value }.indexOf(true)
         TABS.forEachIndexed { i, tab ->
           val focused = i == selected
+          val pad by animateDpAsState(
+            when { down < 0 -> 14.dp; down == i -> 22.dp; else -> 10.dp },
+            spring(dampingRatio = 0.62f, stiffness = Spring.StiffnessMediumLow),
+            label = "squeeze",
+          )
           val bg by animateColorAsState(if (focused) Ember.selected else Ember.raised, label = "tabBg")
           val tint by animateColorAsState(if (focused) Ember.text else Ember.muted, label = "tabTint")
-          val source = remember { MutableInteractionSource() }
-          val scale = rememberPressScale(source, 0.92f)
+          val source = sources[i]
           Row(
             Modifier
-              .graphicsLayer { scaleX = scale; scaleY = scale }
               .clip(RoundedCornerShape(22.dp))
               .background(bg)
               .clickable(interactionSource = source, indication = null) {
@@ -143,16 +175,16 @@ private fun FloatingBar(selected: Int, toCheck: Int, showAdd: Boolean, onSelect:
                   onSelect(i)
                 }
               }
-              .padding(horizontal = 14.dp, vertical = 10.dp),
+              .padding(horizontal = pad, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
           ) {
             if (i == 1 && toCheck > 0) {
               BadgedBox(badge = { Badge(containerColor = Ember.accent, contentColor = Ember.bg) { Label(if (toCheck > 99) "99+" else "$toCheck", size = 10.sp, weight = FontWeight.Bold, color = Ember.bg) } }) {
-                Icon(tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
+                TabIcon(tab, focused, tint)
               }
             } else {
-              Icon(tab.icon, tab.label, tint = tint, modifier = Modifier.size(24.dp))
+              TabIcon(tab, focused, tint)
             }
             AnimatedVisibility(focused, enter = fadeIn() + expandHorizontally(spring(dampingRatio = Spring.DampingRatioLowBouncy)), exit = fadeOut() + shrinkHorizontally()) {
               Label(tab.label, size = 14.sp, weight = FontWeight.Bold, color = tint, maxLines = 1)
@@ -161,11 +193,19 @@ private fun FloatingBar(selected: Int, toCheck: Int, showAdd: Boolean, onSelect:
         }
       }
     }
-    AnimatedVisibility(showAdd, enter = scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy)) + fadeIn(), exit = scaleOut() + fadeOut()) {
+    // The add button's slot (with its 8dp gap) grows and shrinks with it, so the centred pill glides
+    // aside and back instead of jumping when the button finishes leaving.
+    val slot = spring<androidx.compose.ui.unit.IntSize>(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow)
+    AnimatedVisibility(
+      showAdd,
+      enter = expandHorizontally(slot, expandFrom = Alignment.Start, clip = false) + scaleIn(spring(dampingRatio = Spring.DampingRatioMediumBouncy), initialScale = 0.6f) + fadeIn(),
+      exit = shrinkHorizontally(slot, shrinkTowards = Alignment.Start, clip = false) + scaleOut(targetScale = 0.6f) + fadeOut(tween(120)),
+    ) {
       val source = remember { MutableInteractionSource() }
       val scale = rememberPressScale(source, 0.9f)
       Box(
         Modifier
+          .padding(start = 8.dp)
           .graphicsLayer { scaleX = scale; scaleY = scale }
           .shadow(8.dp, CircleShape)
           .size(56.dp)

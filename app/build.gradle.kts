@@ -29,8 +29,22 @@ android {
         buildConfigField("String", "SUPABASE_URL", localString("balance.supabaseUrl"))
         buildConfigField("String", "SUPABASE_KEY", localString("balance.supabaseKey"))
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", localString("balance.googleWebClientId"))
+        // Profile → Developer (dummy data for load testing). On in Dev and fast, off in release.
+        buildConfigField("boolean", "DEV_TOOLS", "true")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Release key from local.properties (balance.release.*). Without it (CI) release falls back to the
+    // debug key, so assembleRelease still works; a build for people to install needs the real one.
+    val releaseStore = local.getProperty("balance.release.storeFile")?.let(::file)?.takeIf { it.exists() }
+    signingConfigs {
+        if (releaseStore != null) create("release") {
+            storeFile = releaseStore
+            storePassword = local.getProperty("balance.release.storePassword")
+            keyAlias = local.getProperty("balance.release.keyAlias")
+            keyPassword = local.getProperty("balance.release.keyPassword")
+        }
     }
 
     buildTypes {
@@ -40,6 +54,8 @@ android {
         }
         release {
             resValue("string", "app_name", "Balance Native")
+            buildConfigField("boolean", "DEV_TOOLS", "false")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "src/main/keepRules/rules.keep")
@@ -50,6 +66,7 @@ android {
             initWith(getByName("release"))
             applicationIdSuffix = ".dev"
             resValue("string", "app_name", "Balance Native Dev")
+            buildConfigField("boolean", "DEV_TOOLS", "true")
             signingConfig = signingConfigs.getByName("debug")
             matchingFallbacks += listOf("release")
         }
@@ -92,6 +109,8 @@ dependencies {
     testImplementation(libs.junit)
     // Android's org.json is a stub on the JVM; the parser tests need the real one.
     testImplementation(libs.org.json)
+    // Real SQLite and android.util.Xml for the ledger-merge, AI-review and xlsx tests.
+    testImplementation(libs.robolectric)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -1,5 +1,7 @@
 package id.sndyy.balancenative.ui.signin
 
+import id.sndyy.balancenative.ui.profile.findActivity
+
 import android.app.Activity
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -76,7 +78,7 @@ fun SignInScreen() {
           busy = true
           error = null
           scope.launch {
-            error = account.signInWithGoogle(context as Activity)
+            error = context.findActivity()?.let { account.signInWithGoogle(it) } ?: "Couldn’t reach Google."
             busy = false
           }
         },

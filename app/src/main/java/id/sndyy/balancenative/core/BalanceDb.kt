@@ -2,19 +2,40 @@ package id.sndyy.balancenative.core
 
 import android.content.ContentValues
 import android.content.Context
-import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import java.util.UUID
 
 /**
- * The only way into the ledger. The listener service and the JS side share this
- * one connection, so there is never a second SQLite library touching the file.
+ * The only way into the ledger. The listener service, the UI, widgets and workers share this
+ * one helper per file, so there is never a second connection or SQLite library touching it.
  * Each account, and local mode, gets its own file; see [Account].
  */
 internal class BalanceDb private constructor(context: Context, val name: String) :
   SQLiteOpenHelper(context.applicationContext, name, null, 5) {
   val appContext: Context = context.applicationContext
+
+  /** Category keyword rules compiled for this file, with the categories they were built from. See [Ledger.loadRules]. */
+  @Volatile internal var categoryRules: Pair<String, List<Ledger.CategoryRule>>? = null
+
+  // Closed because the owner changed (see [get], [closeCurrent]). A stale reference must fail, not quietly
+  // reopen the file: after a switch moved it, reopening would create an empty ledger at the old path.
+  private var retired = false
+
+  override fun getReadableDatabase(): SQLiteDatabase = synchronized(this) {
+    check(!retired) { "Ledger switched" }
+    super.getReadableDatabase()
+  }
+
+  override fun getWritableDatabase(): SQLiteDatabase = synchronized(this) {
+    check(!retired) { "Ledger switched" }
+    super.getWritableDatabase()
+  }
+
+  private fun retire() = synchronized(this) {
+    retired = true
+    close()
+  }
 
   override fun onConfigure(db: SQLiteDatabase) {
     db.setForeignKeyConstraintsEnabled(true)
@@ -177,21 +198,6 @@ internal class BalanceDb private constructor(context: Context, val name: String)
 
   fun aiEnabled(): Boolean = getSetting(Settings.AI_REVIEW) == "1"
 
-  fun query(sql: String, args: List<Any?>): List<Map<String, Any?>> {
-    val bound = args.map(::bindable).toTypedArray()
-    return readableDatabase.rawQuery(sql, bound).use { cursor ->
-      val rows = ArrayList<Map<String, Any?>>(cursor.count)
-      while (cursor.moveToNext()) {
-        rows += (0 until cursor.columnCount).associate { i -> cursor.getColumnName(i) to cursor.value(i) }
-      }
-      rows
-    }
-  }
-
-  fun execute(sql: String, args: List<Any?>) {
-    writableDatabase.execSQL(sql, args.map { if (it is Double && it % 1.0 == 0.0) it.toLong() else it }.toTypedArray())
-  }
-
   companion object {
     @Volatile private var instance: BalanceDb? = null
 
@@ -222,7 +228,7 @@ internal class BalanceDb private constructor(context: Context, val name: String)
       instance?.takeIf { it.name == name }?.let { return it }
       return synchronized(this) {
         instance?.takeIf { it.name == name } ?: run {
-          instance?.close()
+          instance?.retire()
           BalanceDb(context, name).also { instance = it }
         }
       }
@@ -233,23 +239,8 @@ internal class BalanceDb private constructor(context: Context, val name: String)
 
     /** Closes the open ledger so its file can be moved or deleted. */
     fun closeCurrent() = synchronized(this) {
-      instance?.close()
+      instance?.retire()
       instance = null
-    }
-
-    // JS numbers arrive as Double; "1.79E12" would bind as text, so whole numbers become Long strings.
-    private fun bindable(value: Any?): String? = when (value) {
-      null -> null
-      is Double -> if (value % 1.0 == 0.0) value.toLong().toString() else value.toString()
-      is Boolean -> if (value) "1" else "0"
-      else -> value.toString()
-    }
-
-    private fun Cursor.value(i: Int): Any? = when (getType(i)) {
-      Cursor.FIELD_TYPE_NULL -> null
-      Cursor.FIELD_TYPE_INTEGER -> getLong(i).toDouble()
-      Cursor.FIELD_TYPE_FLOAT -> getDouble(i)
-      else -> getString(i)
     }
   }
 }
@@ -260,6 +251,8 @@ internal object Settings {
   const val AI_REVIEW = "ai_review"
   // "0" = no notifications for items that need an answer; anything else (or unset) = on.
   const val REVIEW_ALERTS = "review_alerts"
+  // "1" = those notifications show the bank's text on the lock screen; anything else (or unset) = hidden there.
+  const val LOCK_SCREEN_DETAILS = "lock_screen_details"
   // Which bank rules this ledger was last read with, so a rule update re-reads it once.
   const val PARSE_RULES = "parse_rules"
 

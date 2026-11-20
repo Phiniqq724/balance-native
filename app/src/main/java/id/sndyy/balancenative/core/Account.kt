@@ -20,22 +20,34 @@ internal object Account {
   private const val CLOUD_URL = "cloud_url"
   private const val CLOUD_KEY = "cloud_key"
   private const val LEGACY_DB = "balance.db"
+  private const val SEALED = "vault:"
+  private val vault = Vault("balance_session")
 
   private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
   fun userId(context: Context): String? = prefs(context).getString(USER_ID, null)
 
-  fun getAuthItem(context: Context, key: String): String? = prefs(context).getString(AUTH_PREFIX + key, null)
+  /**
+   * The Supabase session, sealed with a Keystore key ([SEALED] prefix). Values written in plain text before
+   * that are still read, and sealed on the spot, so nobody is signed out by the upgrade. A value that no
+   * longer decrypts (Keystore key gone) reads as no session: signed out.
+   */
+  fun getAuthItem(context: Context, key: String): String? {
+    val stored = prefs(context).getString(AUTH_PREFIX + key, null) ?: return null
+    if (stored.startsWith(SEALED)) return vault.decrypt(stored.removePrefix(SEALED))
+    runCatching { setAuthItem(context, key, stored) }
+    return stored
+  }
 
   fun setAuthItem(context: Context, key: String, value: String) {
-    prefs(context).edit().putString(AUTH_PREFIX + key, value).commit()
+    prefs(context).edit().putString(AUTH_PREFIX + key, SEALED + vault.encrypt(value)).commit()
   }
 
   fun removeAuthItem(context: Context, key: String) {
     prefs(context).edit().remove(AUTH_PREFIX + key).commit()
   }
 
-  /** Supabase URL and publishable key, handed over by JS so background work can call the cloud. */
+  /** Supabase URL and publishable key from the build config, kept here so background work can call the cloud. */
   fun setCloudConfig(context: Context, url: String, key: String) {
     prefs(context).edit().putString(CLOUD_URL, url.trimEnd('/')).putString(CLOUD_KEY, key).apply()
   }

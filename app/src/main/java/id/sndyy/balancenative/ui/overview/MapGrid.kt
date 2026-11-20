@@ -1,0 +1,283 @@
+package id.sndyy.balancenative.ui.overview
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import id.sndyy.balancenative.data.Book
+import id.sndyy.balancenative.data.Format
+import id.sndyy.balancenative.data.monday
+import id.sndyy.balancenative.ui.theme.Ember
+import id.sndyy.balancenative.ui.theme.Satoshi
+import java.time.LocalDate
+import kotlin.math.floor
+import kotlin.math.min
+
+/** How many weeks the map shows at once. What's in view is what's counted. */
+const val MAP_WEEKS = 13
+private val MAP_GAP = 3.dp
+private val MAP_LABELS = 16.dp
+private val RULER_BODY = 34.dp
+/** The ruler's full height with its top padding: how far it hangs below the map. */
+val RULER_HEIGHT = RULER_BODY + 8.dp
+/** Breathing room inside the canvas so a focused week's rim is never cut at the edges. */
+val MAP_PAD = 5.dp
+
+/** The week of the first thing ever logged: the map never travels before it. */
+fun dataWeek(book: Book): LocalDate = monday(maxOf(book.first, book.firstData ?: book.today))
+
+/**
+ * Monday of the map's rightmost column at rest. Normally this week; with less than [MAP_WEEKS] weeks
+ * of history the map starts at the first entry instead, and the weeks still to come fill the right.
+ */
+fun mapEnd(book: Book): LocalDate = maxOf(monday(book.today), dataWeek(book).plusWeeks((MAP_WEEKS - 1).toLong()))
+
+/** Monday of the first visible week when the map's right edge is [back] whole weeks before [mapEnd]. */
+fun mapStart(book: Book, back: Int): LocalDate = mapEnd(book).minusWeeks((back + MAP_WEEKS - 1).toLong())
+
+/** Furthest the map can travel back: until its first column is the week of the first entry. */
+fun mapMaxBack(book: Book): Int =
+  maxOf(0, ((mapEnd(book).toEpochDay() - dataWeek(book).toEpochDay()) / 7).toInt() - (MAP_WEEKS - 1))
+
+/**
+ * The map: [MAP_WEEKS] columns of days that slide through time. [back] is how many weeks the right
+ * edge sits behind this week, fractional while a drag or fling is moving it. Horizontal drags belong
+ * to the map (vertical ones still scroll the page); a tap picks the week under the finger.
+ * One Canvas; it draws one extra column so the edges slide in and out smoothly.
+ */
+@Composable
+fun MapGrid(
+  book: Book,
+  back: () -> Float,
+  focus: LocalDate?,
+  cursor: LocalDate?,
+  onDrag: (weeks: Float) -> Unit,
+  onRelease: (velocityWeeksPerSecond: Float) -> Unit,
+  onTap: (week: LocalDate) -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val measurer = rememberTextMeasurer()
+  val labelStyle = remember { TextStyle(fontFamily = Satoshi, fontWeight = FontWeight.Medium, fontSize = 10.sp, color = Ember.muted) }
+  val yearStyle = remember { labelStyle.copy(fontWeight = FontWeight.Bold, color = Ember.text) }
+  val drag by rememberUpdatedState(onDrag)
+  val release by rememberUpdatedState(onRelease)
+  val tap by rememberUpdatedState(onTap)
+  val now = mapEnd(book)
+
+  BoxWithConstraints(modifier.fillMaxWidth()) {
+    val cell = (maxWidth - MAP_PAD * 2 - MAP_GAP * (MAP_WEEKS - 1)) / MAP_WEEKS
+    val pitchDp = cell + MAP_GAP
+    val height = MAP_LABELS + cell * 7 + MAP_GAP * 6 + MAP_PAD
+    val density = androidx.compose.ui.platform.LocalDensity.current.density
+    val state = rememberDraggableState { px -> drag(px / (pitchDp.value * density)) }
+
+    Canvas(
+      Modifier
+        .fillMaxWidth()
+        .height(height)
+        .semantics { contentDescription = "Spending map, $MAP_WEEKS weeks. Drag sideways to travel through time." }
+        // Dragging right reveals the past, so a rightward drag adds weeks of "back".
+        .draggable(state, Orientation.Horizontal, onDragStopped = { v -> release(v / (pitchDp.value * density)) })
+        .pointerInput(book) {
+          detectTapGestures { o ->
+            val pitch = pitchDp.toPx()
+            val backNow = back()
+            val frac = backNow - floor(backNow)
+            val k = floor((o.x - MAP_PAD.toPx()) / pitch - frac).toInt()
+            val week = now.minusWeeks((floor(backNow).toInt() + MAP_WEEKS - 1 - k).toLong())
+            if (!week.isAfter(book.today) && !week.isBefore(dataWeek(book))) tap(week)
+          }
+        },
+    ) {
+      val c = cell.toPx()
+      val g = MAP_GAP.toPx()
+      val pitch = c + g
+      val top = MAP_LABELS.toPx()
+      // Read here, in the draw phase, so a moving map redraws without recomposing the screen.
+      val b = back()
+      val base = floor(b).toInt()
+      val frac = b - base
+      val radius = CornerRadius(3.dp.toPx())
+
+      fun mondayOf(k: Int): LocalDate = now.minusWeeks((base + MAP_WEEKS - 1 - k).toLong())
+      val pad = MAP_PAD.toPx()
+      fun xOf(k: Int) = pad + (k + frac) * pitch
+
+      clipRect(0f, 0f, size.width, size.height) {
+        // Month names where a month's first week starts. January always carries its year, and so does
+        // the first label in view once the map is in another year, so the past never reads as this year.
+        var yearShown = false
+        for (k in -1..MAP_WEEKS) {
+          val m = mondayOf(k)
+          if (m.dayOfMonth > 7) continue
+          val x = xOf(k)
+          val withYear = m.monthValue == 1 || (!yearShown && x >= pad && m.year != book.today.year)
+          if (x >= pad) yearShown = true
+          val text = if (withYear) "${Format.shortMonth(m)} ${m.year}" else Format.shortMonth(m)
+          drawText(measurer.measure(text, if (withYear) yearStyle else labelStyle), topLeft = Offset(x, 0f))
+        }
+        for (k in -1..MAP_WEEKS) {
+          val m = mondayOf(k)
+          for (row in 0 until 7) {
+            val d = m.plusDays(row.toLong())
+            val at = Offset(xOf(k), top + row * pitch)
+            when (val level = book.level(d)) {
+              -2 -> Unit
+              -1 -> drawCircle(Ember.selected, radius = 1.5.dp.toPx(), center = at + Offset(c / 2, c / 2))
+              else -> {
+                drawRoundRect(Ember.heat[level], at, Size(c, c), radius)
+                if (d == book.today) drawCircle(if (level >= 3) Ember.bg else Ember.text, radius = 2.6.dp.toPx(), center = at + Offset(c / 2, c / 2))
+                if (d == cursor) drawRoundRect(Ember.text, at, Size(c, c), radius)
+              }
+            }
+          }
+        }
+      }
+
+      // Soft edges say "there's more this way"; the right edge fades only when the future isn't next.
+      val fade = 22.dp.toPx()
+      // Both edges always fade, so the map reads as a window onto a longer strip of time.
+      drawRect(Brush.horizontalGradient(listOf(Ember.bg, Color.Transparent), 0f, fade), Offset(0f, top - 4f), Size(fade, size.height))
+      drawRect(Brush.horizontalGradient(listOf(Color.Transparent, Ember.bg), size.width - fade, size.width), Offset(size.width - fade, top - 4f), Size(fade, size.height))
+
+      // The focused week's rim goes on last, above every cell and the edge fades, so neighbouring
+      // columns never paint over it.
+      if (focus != null) {
+        val k = (MAP_WEEKS - 1) - ((now.toEpochDay() - focus.toEpochDay()) / 7).toInt() + base
+        if (k in -1..MAP_WEEKS) {
+          val o = g / 2 + 1.5.dp.toPx()
+          drawRoundRect(
+            Ember.text.copy(alpha = 0.92f),
+            Offset(xOf(k) - o, top - o),
+            Size(c + 2 * o, 7 * pitch - g + 2 * o),
+            CornerRadius(5.dp.toPx()),
+            style = Stroke(1.5.dp.toPx()),
+          )
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Every week in the book as one thin row of heat cells, with a rim around the stretch in view. Tap or
+ * drag along it to jump far without flicking the map a hundred times.
+ */
+@Composable
+fun MapRuler(book: Book, back: () -> Float, onJump: (back: Float, done: Boolean) -> Unit, modifier: Modifier = Modifier) {
+  val jump by rememberUpdatedState(onJump)
+  val measurer = rememberTextMeasurer()
+  val yearStyle = remember { TextStyle(fontFamily = Satoshi, fontWeight = FontWeight.Medium, fontSize = 10.sp, color = Ember.muted) }
+  val now = mapEnd(book)
+  val first = dataWeek(book)
+  val weeks = ((now.toEpochDay() - first.toEpochDay()) / 7).toInt() + 1
+  // Weekly totals, ranked into the same five steps as the days.
+  val levels = remember(book) {
+    val sums = LongArray(weeks) { w -> first.plusWeeks(w.toLong()).let { book.spent(it, it.plusDays(6)) } }
+    val sorted = sums.filter { it > 0 }.sorted()
+    fun q(p: Double) = sorted[((sorted.size - 1) * p).toInt()]
+    IntArray(weeks) { w ->
+      val v = sums[w]
+      when {
+        v <= 0 || sorted.isEmpty() -> 0
+        v <= q(0.25) -> 1
+        v <= q(0.5) -> 2
+        v <= q(0.75) -> 3
+        else -> 4
+      }
+    }
+  }
+  val maxBack = mapMaxBack(book)
+  Canvas(
+    modifier
+      .fillMaxWidth()
+      .height(RULER_BODY)
+      .semantics { contentDescription = "All weeks. Tap to jump." }
+      .pointerInput(book) {
+        fun backAt(x: Float): Float {
+          val w = (x / size.width * weeks).coerceIn(0f, weeks - 1f)
+          // Centre the window on the touched week.
+          return (weeks - 1 - w - (MAP_WEEKS - 1) / 2f).coerceIn(0f, maxBack.toFloat())
+        }
+        detectTapGestures { o -> jump(backAt(o.x), true) }
+      }
+      .pointerInput(book, "drag") {
+        fun backAt(x: Float): Float {
+          val w = (x / size.width * weeks).coerceIn(0f, weeks - 1f)
+          return (weeks - 1 - w - (MAP_WEEKS - 1) / 2f).coerceIn(0f, maxBack.toFloat())
+        }
+        var last = 0f
+        detectHorizontalDragGestures(
+          onDragStart = { o -> last = backAt(o.x); jump(last, false) },
+          onDragEnd = { jump(last, true) },
+        ) { change, _ -> change.consume(); last = backAt(change.position.x); jump(last, false) }
+      },
+  ) {
+    // Years of history make hundreds of weeks: past ~3dp a week the gaps go, and the cells touch.
+    val gap = if (size.width / weeks >= 3.dp.toPx()) 1.dp.toPx() else 0f
+    val c = (size.width - gap * (weeks - 1)) / weeks
+    val h = 10.dp.toPx()
+    val y = 5.dp.toPx()
+    for (w in 0 until weeks) {
+      val corner = if (gap > 0) CornerRadius(min(1.5.dp.toPx(), c / 2)) else CornerRadius.Zero
+      drawRoundRect(Ember.heat[levels[w]], Offset(w * (c + gap), y), Size(c, h), corner)
+    }
+    // Years under the bar, at the first week of each, skipped where they'd collide.
+    var freeFrom = 0f
+    for (w in 0 until weeks) {
+      val m = first.plusWeeks(w.toLong())
+      if (w != 0 && m.year == m.minusWeeks(1).year) continue
+      val label = measurer.measure(m.year.toString(), yearStyle)
+      val x = (w * (c + gap)).coerceAtMost(size.width - label.size.width)
+      if (x < freeFrom) continue
+      drawText(label, topLeft = Offset(x, y + h + 5.dp.toPx()))
+      freeFrom = x + label.size.width + 8.dp.toPx()
+    }
+    // The window: the MAP_WEEKS weeks in view.
+    val right = weeks - 1 - back()
+    val left = right - (MAP_WEEKS - 1)
+    val pad = 3.dp.toPx()
+    drawRoundRect(
+      Ember.text.copy(alpha = 0.92f),
+      Offset(left * (c + gap) - pad, y - pad),
+      Size((MAP_WEEKS) * (c + gap) - gap + 2 * pad, h + 2 * pad),
+      CornerRadius(4.dp.toPx()),
+      style = Stroke(1.5.dp.toPx()),
+    )
+  }
+}
+
+fun selectionLabel(sel: id.sndyy.balancenative.data.Selection): String {
+  val a = sel.start
+  val b = sel.end
+  if (a == b) return Format.shortDate(a)
+  val year = if (b.year != LocalDate.now().year) " ${b.year}" else ""
+  return if (a.month == b.month && a.year == b.year) "${a.dayOfMonth}–${b.dayOfMonth} ${Format.shortMonth(b)}$year"
+  else "${a.dayOfMonth} ${Format.shortMonth(a)} – ${b.dayOfMonth} ${Format.shortMonth(b)}$year"
+}

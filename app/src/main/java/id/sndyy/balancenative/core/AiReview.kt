@@ -142,7 +142,7 @@ internal class AiReviewWorker(context: Context, params: WorkerParameters) : Coro
           when (val r = readWithOwnKey(context, db, own, batch)) {
             is Read.Done -> r.answers
             is Read.Stop -> return Result.success()
-            Read.Retry -> return retryOrGiveUp()
+            Read.Retry -> return failedBatch(context, owner, batch)
           }
         } else {
           val session = CloudAuth.session(context, owner, TIMEOUT_MS) ?: return Result.success()
@@ -159,7 +159,8 @@ internal class AiReviewWorker(context: Context, params: WorkerParameters) : Coro
               waitFor(context, res.retryAfter)
               return Result.success()
             }
-            else -> return retryOrGiveUp()
+            // The function failed (and may have spent its AI budget doing so): count an attempt and back off.
+            else -> return failedBatch(context, owner, batch)
           }
         }
         apply(context, owner, batch, answers)
@@ -193,7 +194,7 @@ internal class AiReviewWorker(context: Context, params: WorkerParameters) : Coro
     } catch (e: AiProviders.Failure) {
       return when (e.reason) {
         // Leave the items pending and don't try again until the key changes or an hour passes.
-        AiProviders.Reason.BAD_KEY, AiProviders.Reason.NO_CREDIT -> {
+        AiProviders.Reason.BAD_KEY, AiProviders.Reason.NO_CREDIT, AiProviders.Reason.MODEL_GONE -> {
           AiKey.setStatus(context, e.reason)
           Read.Stop
         }
@@ -211,6 +212,18 @@ internal class AiReviewWorker(context: Context, params: WorkerParameters) : Coro
     val wait = retryAfter?.takeIf { it > 0 } ?: 60
     AiReview.block(context, wait)
     AiReview.enqueue(context, wait)
+  }
+
+  /**
+   * An answer we couldn't use. Every item in the batch counts an attempt (3 and it waits for the user as
+   * "Not sure"), and the next pass waits a minute. Without this the items stayed pending, and every new
+   * notification sent the same batch again: a paid call each time when the provider had answered 200.
+   */
+  private fun failedBatch(context: Context, owner: String, batch: List<AiReview.Item>): Result {
+    // Blocked first, so the ledger change below doesn't kick a pass straight away.
+    waitFor(context, null)
+    apply(context, owner, batch, emptyMap())
+    return Result.success()
   }
 
   private fun retryOrGiveUp(): Result = if (runAttemptCount >= MAX_RETRIES) Result.success() else Result.retry()

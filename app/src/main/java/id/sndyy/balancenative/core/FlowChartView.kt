@@ -63,7 +63,8 @@ private fun parse(hex: String): Color = Color(android.graphics.Color.parseColor(
 
 /** Scrubbable chart drawn on a Canvas: @expo/ui has no chart components. */
 @Composable
-fun FlowChart(props: FlowChartProps, modifier: Modifier = Modifier) {
+fun FlowChart(props: FlowChartProps, modifier: Modifier = Modifier, onScrub: (Int?) -> Unit = {}) {
+  val scrub by androidx.compose.runtime.rememberUpdatedState(onScrub)
   val context = LocalContext.current
   val view = LocalView.current
   val measurer = rememberTextMeasurer()
@@ -85,27 +86,44 @@ fun FlowChart(props: FlowChartProps, modifier: Modifier = Modifier) {
         if (count == 0) return@pointerInput
         fun indexAt(x: Float) = ((x / size.width) * count).toInt().coerceIn(0, count - 1)
         awaitEachGesture {
-          // The chart owns the whole touch from the moment a finger lands: nothing above it (page
-          // scroll, tab swiper) moves while scrubbing. Consuming on the Initial pass runs before any
-          // ancestor's drag detection, which in Compose is the only way to "disallow intercept".
-          val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-          down.consume()
-          touched = indexAt(down.position.x)
+          // Swipes pass straight through to the page and the tab pager. The chart only takes the
+          // touch once a finger rests on it (or taps it): then it owns every move until lift, and
+          // consuming on the Initial pass keeps the page and pager still while it scrubs.
+          val down = awaitFirstDown(requireUnconsumed = false)
+          val held = withTimeoutOrNull(140L) {
+            while (true) {
+              val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: return@withTimeoutOrNull false
+              if (!change.pressed) return@withTimeoutOrNull true
+              if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) return@withTimeoutOrNull false
+            }
+            @Suppress("UNREACHABLE_CODE") false
+          }
+          if (held == false) return@awaitEachGesture
+          val first = indexAt(down.position.x)
           view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+          if (held == true) {
+            // A tap pins that slot's readout; tapping it again lets go.
+            touched = if (touched == first) null else first
+            scrub(touched)
+            return@awaitEachGesture
+          }
+          touched = first
+          scrub(touched)
           while (true) {
             val event = awaitPointerEvent(PointerEventPass.Initial)
             val change = event.changes.firstOrNull { it.id == down.id } ?: break
-            if (!change.pressed) {
-              change.consume()
-              break
-            }
             change.consume()
+            if (!change.pressed) break
             val next = indexAt(change.position.x)
             // A light tick per slot, so scrubbing feels like a dial.
-            if (next != touched) view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+            if (next != touched) {
+              view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+              scrub(next)
+            }
             touched = next
           }
           touched = null
+          scrub(null)
         }
       }
   ) {

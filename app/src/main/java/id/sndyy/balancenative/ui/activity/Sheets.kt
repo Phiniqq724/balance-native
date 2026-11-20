@@ -67,6 +67,8 @@ import id.sndyy.balancenative.ui.kit.Chip
 import id.sndyy.balancenative.ui.kit.EmberSwitch
 import id.sndyy.balancenative.ui.kit.Field
 import id.sndyy.balancenative.ui.kit.Label
+import id.sndyy.balancenative.ui.kit.CellButton
+import id.sndyy.balancenative.ui.kit.SqueezeRow
 import id.sndyy.balancenative.ui.kit.Money
 import id.sndyy.balancenative.ui.kit.Rule
 import id.sndyy.balancenative.ui.kit.RupiahGrouping
@@ -82,6 +84,11 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
+
+/** A choice inside a sheet: raised so it stands off the sheet's own surface, and still under the finger. */
+@Composable
+private fun FormChip(label: String, selected: Boolean, onPress: () -> Unit) =
+  Chip(label, selected, face = Ember.raised, grow = false, onPress = onPress)
 
 @Composable
 fun primaryButtonColors() = ButtonDefaults.buttonColors(containerColor = Ember.text, contentColor = Ember.bg)
@@ -126,7 +133,7 @@ fun TxSheet(tx: Transaction, categories: List<Category>, label: (String) -> Stri
       Label("Category", size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
       FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         (categories.map { it.id to it.name } + (null to "None")).forEach { (id, name) ->
-          Chip(name, categoryId == id) {
+          FormChip(name, categoryId == id) {
             val previous = categoryId
             categoryId = id
             scope.launch { runCatching { core.setCategory(tx.id, id) }.onFailure { categoryId = previous; error = "Couldn't save the category." } }
@@ -208,11 +215,14 @@ private fun ReviewActions(n: Unparsed, openFix: Boolean) {
   var fixing by remember(n.id) { mutableStateOf(openFix) }
   var busy by remember(n.id) { mutableStateOf(false) }
   var error by remember(n.id) { mutableStateOf<String?>(null) }
+  /** Which answer was committed: it fills with ink while the card leaves. */
+  var chosen by remember(n.id) { mutableStateOf<String?>(null) }
   val suggestion = verdictOf(n)
 
-  fun send(v: Verdict) {
+  fun send(v: Verdict, which: String) {
     if (busy) return
     busy = true
+    chosen = which
     error = null
     view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
     scope.launch {
@@ -225,6 +235,7 @@ private fun ReviewActions(n: Unparsed, openFix: Boolean) {
       } catch (e: Exception) {
         error = "Couldn't save. Try again."
         busy = false
+        chosen = null
       }
     }
   }
@@ -238,14 +249,30 @@ private fun ReviewActions(n: Unparsed, openFix: Boolean) {
     } else {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (suggestion != null) Label(question(suggestion), weight = FontWeight.Medium) else Label("Couldn't read this one.", size = 14.sp, tone = Tone.MUTED)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-          if (suggestion != null) {
-            Button(onClick = { send(suggestion) }, enabled = !busy, colors = primaryButtonColors()) { Label("Yes", weight = FontWeight.Medium, color = Ember.bg) }
-          }
-          TextButton(onClick = { fixing = true }, enabled = !busy) { Label(if (suggestion != null) "Fix" else "Add", weight = FontWeight.Medium) }
-          if (suggestion?.kind != AiKind.AD_OR_OTHER) {
-            TextButton(onClick = { send(NOT_A_TRANSACTION) }, enabled = !busy) { Label("Not money", weight = FontWeight.Medium, tone = Tone.MUTED) }
-          }
+        // Answers are commitments: neutral cells at rest that swell on press, and the one you commit
+        // turns ink while the card leaves.
+        val answers = buildList {
+          if (suggestion != null) add("yes" to "Yes")
+          add("fix" to if (suggestion != null) "Fix" else "Add")
+          if (suggestion?.kind != AiKind.AD_OR_OTHER) add("no" to "Not money")
+        }
+        SqueezeRow(answers.size, Modifier.fillMaxWidth().padding(top = 4.dp), spacing = 4.dp) { i, source, weight ->
+          val (key, label) = answers[i]
+          CellButton(
+            on = chosen == key,
+            onClick = {
+              if (busy) return@CellButton
+              when (key) {
+                "yes" -> send(suggestion!!, key)
+                "fix" -> fixing = true
+                else -> send(NOT_A_TRANSACTION, key)
+              }
+            },
+            modifier = weight,
+            source = source,
+            height = 44.dp,
+            face = Ember.raised,
+          ) { fg -> Label(label, size = 14.sp, weight = FontWeight.Bold, color = fg, maxLines = 1) }
         }
         error?.let { Label(it, size = 14.sp, tone = Tone.DANGER) }
       }
@@ -255,7 +282,7 @@ private fun ReviewActions(n: Unparsed, openFix: Boolean) {
   if (fixing) {
     FixSheet(suggestion?.takeIf { it.kind != AiKind.AD_OR_OTHER }, onClose = { fixing = false }) { v ->
       fixing = false
-      send(v)
+      send(v, "fix")
     }
   }
 }
@@ -272,7 +299,7 @@ private fun FixSheet(start: Verdict?, onClose: () -> Unit, onSave: (Verdict) -> 
     Label("What was it?", size = 22.sp, weight = FontWeight.Bold)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
       listOf(AiKind.EXPENSE to "Spent", AiKind.INCOME to "Received", AiKind.TRANSFER to "Own accounts").forEach { (k, l) ->
-        Chip(l, kind == k) {
+        FormChip(l, kind == k) {
           kind = k
           if (k == AiKind.EXPENSE) direction = Direction.OUT
           if (k == AiKind.INCOME) direction = Direction.IN
@@ -281,8 +308,8 @@ private fun FixSheet(start: Verdict?, onClose: () -> Unit, onSave: (Verdict) -> 
     }
     AnimatedVisibility(kind == AiKind.TRANSFER) {
       Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Chip("Out", direction == Direction.OUT) { direction = Direction.OUT }
-        Chip("In", direction == Direction.IN) { direction = Direction.IN }
+        FormChip("Out", direction == Direction.OUT) { direction = Direction.OUT }
+        FormChip("In", direction == Direction.IN) { direction = Direction.IN }
       }
     }
     Field(amount, { amount = amountInput(it) }, "Amount (Rp)", Modifier.fillMaxWidth(), KeyboardType.Number, RupiahGrouping)
@@ -318,8 +345,8 @@ fun NewTxSheet(onClose: () -> Unit) {
   Sheet(onClose) {
     Label("New transaction", size = 22.sp, weight = FontWeight.Bold)
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-      Chip("Spent", direction == Direction.OUT) { direction = Direction.OUT }
-      Chip("Received", direction == Direction.IN) { direction = Direction.IN }
+      FormChip("Spent", direction == Direction.OUT) { direction = Direction.OUT }
+      FormChip("Received", direction == Direction.IN) { direction = Direction.IN }
     }
     // The amount is the point of the sheet, so it's typed big, grouped as you go, in the color of its direction.
     Field(
@@ -331,7 +358,7 @@ fun NewTxSheet(onClose: () -> Unit) {
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Label("Category", size = 13.sp, weight = FontWeight.Medium, tone = Tone.MUTED)
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-          categories.forEach { c -> Chip(c.name, categoryId == c.id) { categoryId = if (categoryId == c.id) null else c.id } }
+          categories.forEach { c -> FormChip(c.name, categoryId == c.id) { categoryId = if (categoryId == c.id) null else c.id } }
         }
       }
     }

@@ -7,9 +7,11 @@ import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
 import android.provider.Settings as AndroidSettings
+import id.sndyy.balancenative.BuildConfig
 import id.sndyy.balancenative.data.ActivityPage
 import id.sndyy.balancenative.data.ActivityQuery
 import id.sndyy.balancenative.data.AiKind
+import id.sndyy.balancenative.data.DayTotal
 import id.sndyy.balancenative.data.Apps
 import id.sndyy.balancenative.data.Category
 import id.sndyy.balancenative.data.Direction
@@ -22,6 +24,7 @@ import id.sndyy.balancenative.data.Transaction
 import id.sndyy.balancenative.data.Unparsed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.LocalDate
 import java.util.UUID
 
 /**
@@ -148,13 +151,22 @@ class BalanceCore(context: Context) {
         ors += "instr(CAST(t.amount AS TEXT), ?) > 0"; args += number
       }
       // The search also matches the app name ("jago", "gopay").
-      val sources = read("SELECT DISTINCT source FROM transactions") { it.getString(0) }.filter { sourceLabel(it).lowercase().contains(q) }
+      val sources = ledgerSources().filter { sourceLabel(it).lowercase().contains(q) }
       if (sources.isNotEmpty()) {
         ors += "t.source IN (${sources.joinToString(",") { "?" }})"; args.addAll(sources)
       }
       where += "(${ors.joinToString(" OR ")})"
     }
     return (if (where.isEmpty()) "" else " WHERE ${where.joinToString(" AND ")}") to args
+  }
+
+  // Apps the ledger has entries from, for matching a search against app names. Re-read only after a ledger write.
+  @Volatile private var sources: Pair<Long, List<String>>? = null
+
+  private suspend fun ledgerSources(): List<String> {
+    val version = BalanceEvents.version
+    sources?.let { (seen, list) -> if (seen == version) return list }
+    return read("SELECT DISTINCT source FROM transactions") { it.getString(0) }.also { sources = version to it }
   }
 
   /**
@@ -182,12 +194,25 @@ class BalanceCore(context: Context) {
     return ActivityPage(rows, total, spent, received, hasMore = rows.size < total)
   }
 
-  suspend fun flows(fromMs: Long): List<Flow> = read(
+  /**
+   * Spend and income per local day over the whole ledger, summed by SQLite. The result is one row per
+   * day with activity, so it stays a few thousand rows however many payments there are.
+   */
+  suspend fun dailyTotals(): List<DayTotal> = read(
+    """SELECT date(occurred_at / 1000, 'unixepoch', 'localtime') AS day,
+              SUM(CASE WHEN direction = 'in' THEN 0 ELSE amount END) AS spent,
+              SUM(CASE WHEN direction = 'in' THEN amount ELSE 0 END) AS received
+       FROM transactions WHERE is_transfer = 0
+       GROUP BY day ORDER BY day""",
+  ) { DayTotal(LocalDate.parse(it.getString(0)), it.getLong(1), it.getLong(2)) }
+
+  /** Payments in [fromMs, toMs), oldest first. Ranges stay small (a selection), and occurred_at is indexed. */
+  suspend fun flows(fromMs: Long, toMs: Long): List<Flow> = read(
     """SELECT t.direction, t.amount, t.category_id, c.name AS category_name, t.counterparty, t.bank_category, t.source, t.occurred_at
        FROM transactions t LEFT JOIN categories c ON c.id = t.category_id
-       WHERE t.is_transfer = 0 AND t.occurred_at >= ?
+       WHERE t.is_transfer = 0 AND t.occurred_at >= ? AND t.occurred_at < ?
        ORDER BY t.occurred_at""",
-    listOf(fromMs),
+    listOf(fromMs, toMs),
   ) {
     Flow(
       direction = Direction.of(it.str("direction")),
@@ -232,6 +257,25 @@ class BalanceCore(context: Context) {
       },
     )
   }
+
+  /** What the AI put away as ads without asking, newest first, so one it got wrong can be brought back. */
+  suspend fun dismissed(): List<Unparsed> = read(
+    """SELECT r.id, r.package, r.title, r.body, r.posted_at
+       FROM raw_notifications r JOIN ai_reviews a ON a.raw_id = r.id
+       WHERE a.state = 'dismissed' AND r.status = 'ignored' ORDER BY r.posted_at DESC LIMIT 50""",
+  ) {
+    Unparsed(id = it.long("id")!!, source = it.str("package")!!, title = it.str("title"), body = it.str("body").orEmpty(), postedAt = it.long("posted_at") ?: 0, review = null)
+  }
+
+  suspend fun restoreDismissed(rawId: Long) = write { d -> Ledger.restoreDismissed(d, rawId) }
+
+  /** How many wait in To check, and what the AI read as spending among them: summed by SQLite, no rows read. */
+  suspend fun toCheckSummary(): Pair<Int, Long> = read(
+    """SELECT COUNT(*),
+              COALESCE(SUM(CASE WHEN a.state IN ('pending', 'suggested', 'failed') AND a.direction = 'out' THEN a.amount END), 0)
+       FROM raw_notifications r LEFT JOIN ai_reviews a ON a.raw_id = r.id
+       WHERE r.status = 'unparsed'""",
+  ) { it.getInt(0) to it.getLong(1) }.first()
 
   suspend fun unparsedCount(): Int = read("SELECT COUNT(*) FROM raw_notifications WHERE status = 'unparsed'") { it.getInt(0) }.first()
 
@@ -288,9 +332,14 @@ class BalanceCore(context: Context) {
 
   suspend fun setWatchedPackages(packages: List<String>) = setSetting(Settings.WATCHED_PACKAGES, packages.distinct().joinToString(","))
 
+  // The bundled rules never change while the process lives: read from the APK once, not on every resume.
+  @Volatile private var bundledRules: String? = null
+
   /** Hands the bundled bank rules to the parser. Re-reads the ledger only when they changed. */
   suspend fun applyBundledRules() {
-    val json = withContext(Dispatchers.IO) { app.assets.open("parse_rules.json").bufferedReader().use { it.readText() } }
+    val json = bundledRules ?: withContext(Dispatchers.IO) {
+      app.assets.open("parse_rules.json").bufferedReader().use { it.readText() }
+    }.also { bundledRules = it }
     write(notify = false) { d -> Ledger.applyRules(d, json) }.also { changed -> if (changed) Ledger.onChanged(app) }
   }
 
@@ -359,6 +408,23 @@ class BalanceCore(context: Context) {
   }
 
   private fun importLabels(d: BalanceDb): Map<String, String> = d.watchedPackages().associateWith { sourceLabel(it) }
+
+  // ---- Dev tools (dev and fast builds) ----
+
+  suspend fun dummyCount(): Int = withContext(Dispatchers.IO) { DevSeed.count(db) }
+
+  /** Adds [count] made-up rows. Local mode only, so none of it can reach the cloud. Returns (rows, ms). */
+  suspend fun seedDummy(count: Int): Pair<Int, Long> {
+    check(BuildConfig.DEV_TOOLS) { "Dev tools are off in this build" }
+    val started = System.nanoTime()
+    val added = write { d ->
+      check(Account.userId(app) == Account.LOCAL) { "Dummy data is local mode only" }
+      DevSeed.seed(d, count)
+    }
+    return added to (System.nanoTime() - started) / 1_000_000
+  }
+
+  suspend fun clearDummy(): Int = write { d -> DevSeed.clear(d) }
 
   data class AiKeyInfo(val provider: String, val last4: String, val status: String?)
   data class ImportResult(val added: Int, val existing: Int, val newCategories: Int)

@@ -2,15 +2,35 @@ package id.sndyy.balancenative.ui.profile
 
 import android.app.Activity
 import android.app.Application
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.material3.Icon
+import androidx.compose.ui.res.painterResource
+import id.sndyy.balancenative.R
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import id.sndyy.balancenative.core.ProfileView
+import id.sndyy.balancenative.ui.kit.Haptic
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -35,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -48,12 +69,18 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import id.sndyy.balancenative.BuildConfig
 import id.sndyy.balancenative.balance
 import id.sndyy.balancenative.core.AccountState
 import id.sndyy.balancenative.core.BalanceCore
 import id.sndyy.balancenative.core.BalanceException
 import id.sndyy.balancenative.core.SyncWorker
 import id.sndyy.balancenative.data.Apps
+import id.sndyy.balancenative.data.ActivityQuery
+import id.sndyy.balancenative.ui.overview.CELL_GAP
+import id.sndyy.balancenative.ui.overview.CellMeter
+import id.sndyy.balancenative.ui.overview.RANK_1
+import id.sndyy.balancenative.ui.overview.cellsFor
 import id.sndyy.balancenative.data.Category
 import id.sndyy.balancenative.data.Format
 import id.sndyy.balancenative.data.InstalledApp
@@ -80,7 +107,9 @@ data class ProfileData(
   val hasAccess: Boolean,
   val aiReview: Boolean,
   val alerts: Boolean,
+  val lockScreenDetails: Boolean,
   val aiKey: BalanceCore.AiKeyInfo?,
+  val entries: Int,
 )
 
 class ProfileViewModel(app: Application) : AndroidViewModel(app) {
@@ -94,7 +123,9 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
       hasAccess = core.hasNotificationAccess(),
       aiReview = core.aiReviewEnabled(),
       alerts = core.setting("review_alerts") != "0",
+      lockScreenDetails = core.setting("lock_screen_details") == "1",
       aiKey = core.aiKeyInfo(),
+      entries = runCatching { core.activityPage(ActivityQuery(), 1).total }.getOrDefault(0),
     )
   }
 
@@ -117,13 +148,17 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
   var creating by remember { mutableStateOf(false) }
   var pickingApps by remember { mutableStateOf(false) }
   var keySheet by remember { mutableStateOf(false) }
+  var profileSheet by remember { mutableStateOf(false) }
+  val profile by context.balance.profiles.state.collectAsState()
+  LaunchedEffect(accountState) { context.balance.profiles.load(accountState) }
 
   val data = (state as? Loaded.Ready)?.data ?: return Loading()
   val appByPackage = apps.associateBy { it.packageName }
   fun label(pkg: String) = appByPackage[pkg]?.label ?: core.sourceLabel(pkg)
 
   Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).statusBarsPadding()) {
-    Header(accountState)
+    Header(accountState, profile) { profileSheet = true }
+    Summary(data)
 
     SectionHead("Categories")
     FlowRow(Modifier.padding(horizontal = Space.page), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -132,23 +167,34 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
     }
 
     SectionHead("Reading")
-    AnimatedVisibility(!data.hasAccess) {
-      SettingsRow("Notification access off", "Needed to log payments", tone = Tone.DANGER) { core.openNotificationAccessSettings() }
+    Group {
+      AnimatedVisibility(!data.hasAccess) {
+        SettingsRow("Notification access off", "Needed to log payments", tone = Tone.DANGER) { core.openNotificationAccessSettings() }
+      }
+      SettingsRow("Read from", data.watched.joinToString(", ") { label(it) }.ifEmpty { "Nothing yet" }, status = "${data.watched.size} on") { pickingApps = true }
+      ToggleRow("AI review", "Reads what the rules can't", data.aiReview, enabled = accountState is AccountState.Signed || data.aiKey != null) { on ->
+        scope.launch { core.setAiReview(on) }
+      }
+      ToggleRow("Alerts", "Ask me about unclear ones", data.alerts) { on -> scope.launch { core.setSetting("review_alerts", if (on) "1" else "0") } }
+      ToggleRow("Details on lock screen", "Show the bank's text before unlocking", data.lockScreenDetails, enabled = data.alerts) { on ->
+        scope.launch { core.setSetting("lock_screen_details", if (on) "1" else "0") }
+      }
+      SettingsRow("AI key", data.aiKey?.let { "${it.provider} ····${it.last4}" } ?: "Use your own Gemini, OpenAI or Claude key") { keySheet = true }
     }
-    SettingsRow("Read from", data.watched.joinToString(", ") { label(it) }.ifEmpty { "Nothing yet" }, status = "${data.watched.size} on") { pickingApps = true }
-    ToggleRow("AI review", "Reads what the rules can't", data.aiReview, enabled = accountState is AccountState.Signed || data.aiKey != null) { on ->
-      scope.launch { core.setAiReview(on) }
-    }
-    ToggleRow("Alerts", "Ask me about unclear ones", data.alerts) { on -> scope.launch { core.setSetting("review_alerts", if (on) "1" else "0") } }
-    SettingsRow("AI key", data.aiKey?.let { "${it.provider} ····${it.last4}" } ?: "Use your own Gemini, OpenAI or Claude key") { keySheet = true }
 
     SectionHead("Data")
-    DataRows()
+    Group { DataRows() }
 
     SectionHead("Account")
-    AccountRows(accountState)
+    Group { AccountRows(accountState) }
 
-    Spacer(Modifier.height(140.dp))
+    if (BuildConfig.DEV_TOOLS) {
+      SectionHead("Developer")
+      Group { DevRows(accountState) }
+    }
+
+    MadeBy()
+    Spacer(Modifier.height(Space.navClearance))
   }
 
   if (creating || editing != null) {
@@ -156,29 +202,128 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
   }
   if (pickingApps) AppPicker(apps, data.watched, onClose = { pickingApps = false }) { next -> scope.launch { core.setWatchedPackages(next) } }
   if (keySheet) AiKeySheet(data.aiKey) { keySheet = false }
+  profile?.let { p -> if (profileSheet) ProfileSheet(p, (accountState as? AccountState.Signed)?.user?.email) { profileSheet = false } }
 }
 
+/**
+ * Photo (or Mosaic), name and where the profile lives. The whole row opens the edit sheet and sinks a
+ * dp under the finger; the Edit pill just says so.
+ */
 @Composable
-private fun Header(state: AccountState) {
-  val (name, detail) = when (state) {
-    is AccountState.Signed -> (state.user.name ?: state.user.email ?: "You") to (state.user.email ?: "Google")
-    else -> "This phone" to "Nothing leaves it"
-  }
-  Row(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 28.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-    Box(Modifier.size(52.dp).clip(RoundedCornerShape(18.dp)).background(Ember.raised), contentAlignment = Alignment.Center) {
-      Label(name.take(1).uppercase(), size = 22.sp, weight = FontWeight.Bold)
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+private fun Header(state: AccountState, profile: ProfileView?, onEdit: () -> Unit) {
+  val signed = state as? AccountState.Signed
+  val name = profile?.username?.let { "@$it" } ?: signed?.user?.name ?: signed?.user?.email ?: "This phone"
+  val detail = if (signed != null) "Synced with Google" else "Nothing leaves it"
+  val view = LocalView.current
+  val source = remember { MutableInteractionSource() }
+  val pressed by source.collectIsPressedAsState()
+  val press by animateFloatAsState(if (pressed) 1f else 0f, spring(stiffness = Spring.StiffnessHigh), label = "headerPress")
+  val sink = with(LocalDensity.current) { 1.dp.toPx() }
+  Row(
+    Modifier
+      .fillMaxWidth()
+      .padding(start = Space.page - 8.dp, end = Space.page - 8.dp, top = 20.dp)
+      .graphicsLayer { translationY = press * sink }
+      .clip(RoundedCornerShape(24.dp))
+      .clickable(enabled = profile != null, interactionSource = source, indication = null, role = Role.Button, onClickLabel = "Edit profile") {
+        Haptic.key(view)
+        onEdit()
+      }
+      .padding(8.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(14.dp),
+  ) {
+    Avatar(profile?.shown, profile?.seed ?: "", 60.dp)
+    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
       Label(name, size = 22.sp, weight = FontWeight.Bold, maxLines = 1)
       Label(detail, size = 13.sp, tone = Tone.MUTED, maxLines = 1)
     }
+    Label(
+      "Edit",
+      Modifier.clip(RoundedCornerShape(50)).background(Ember.raised).padding(horizontal = 13.dp, vertical = 7.dp),
+      size = 13.sp,
+      weight = FontWeight.Medium,
+    )
+  }
+}
+
+/**
+ * The sign-off at the very bottom: the SNDYY wordmark in muted ink over the version. The mark opens the
+ * portfolio and sinks a dp under the finger, like every other press in the app.
+ */
+@Composable
+private fun MadeBy() {
+  val context = LocalContext.current
+  val view = LocalView.current
+  val source = remember { MutableInteractionSource() }
+  val pressed by source.collectIsPressedAsState()
+  val press by animateFloatAsState(if (pressed) 1f else 0f, spring(stiffness = Spring.StiffnessHigh), label = "madeByPress")
+  val sink = with(LocalDensity.current) { 1.dp.toPx() }
+  Column(
+    Modifier.fillMaxWidth().padding(top = Space.section + 16.dp),
+    horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.spacedBy(10.dp),
+  ) {
+    Column(
+      Modifier
+        .graphicsLayer { translationY = press * sink; alpha = 1f - press * 0.25f }
+        .clip(RoundedCornerShape(12.dp))
+        .clickable(interactionSource = source, indication = null, role = Role.Button, onClickLabel = "Open sndyy.id") {
+          Haptic.key(view)
+          runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PORTFOLIO))) }
+        }
+        .padding(horizontal = 16.dp, vertical = 10.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Label("Made by", size = 12.sp, tone = Tone.MUTED)
+      Icon(painterResource(R.drawable.sndyy_logo), contentDescription = "SNDYY", tint = Ember.muted, modifier = Modifier.height(16.dp).aspectRatio(3482f / 690f))
+    }
+    Label("Balance ${BuildConfig.VERSION_NAME}", size = 11.sp, tone = Tone.MUTED)
+  }
+}
+
+private const val PORTFOLIO = "https://www.sndyy.id"
+
+/** A soft panel holding related rows: grouping by surface instead of dividers. */
+@Composable
+private fun Group(content: @Composable ColumnScope.() -> Unit) {
+  Column(
+    Modifier.fillMaxWidth().padding(horizontal = Space.page).clip(RoundedCornerShape(16.dp)).background(Ember.surface).padding(vertical = 4.dp),
+    content = content,
+  )
+}
+
+/**
+ * The ledger at a glance under the name: three large cells on the grid's pitch, each a count with a
+ * row of small cells that hints at its size.
+ */
+@Composable
+private fun Summary(data: ProfileData) {
+  Row(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = 20.dp), horizontalArrangement = Arrangement.spacedBy(CELL_GAP)) {
+    SummaryCell(Format.digits(data.entries.toLong()), if (data.entries == 1) "entry" else "entries", cellsFor(minOf(1.0, data.entries / 1000.0), 10))
+    SummaryCell(data.watched.size.toString(), if (data.watched.size == 1) "app read" else "apps read", minOf(10, data.watched.size))
+    SummaryCell(data.categories.size.toString(), if (data.categories.size == 1) "category" else "categories", minOf(10, data.categories.size))
+  }
+}
+
+@Composable
+private fun RowScope.SummaryCell(value: String, label: String, filled: Int) {
+  Column(
+    Modifier.weight(1f).clip(RoundedCornerShape(6.dp)).background(Ember.surface).padding(12.dp),
+    verticalArrangement = Arrangement.spacedBy(2.dp),
+  ) {
+    Label(value, size = 20.sp, weight = FontWeight.Bold, maxLines = 1)
+    Label(label, size = 12.sp, tone = Tone.MUTED, maxLines = 1)
+    Spacer(Modifier.height(8.dp))
+    CellMeter(filled, 10, RANK_1)
   }
 }
 
 @Composable
 fun SettingsRow(title: String, subtitle: String? = null, status: String? = null, tone: Tone = Tone.TEXT, statusTone: Tone = Tone.MUTED, onPress: (() -> Unit)? = null) {
   Row(
-    Modifier.fillMaxWidth().then(if (onPress != null) Modifier.clickable(onClick = onPress) else Modifier).padding(horizontal = Space.page, vertical = 14.dp),
+    Modifier.fillMaxWidth().then(if (onPress != null) Modifier.clickable(onClick = onPress) else Modifier).padding(horizontal = 16.dp, vertical = 14.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(12.dp),
   ) {
@@ -193,7 +338,7 @@ fun SettingsRow(title: String, subtitle: String? = null, status: String? = null,
 @Composable
 private fun ToggleRow(title: String, subtitle: String, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
   Row(
-    Modifier.fillMaxWidth().clickable(enabled = enabled) { onChange(!checked) }.padding(horizontal = Space.page, vertical = 12.dp),
+    Modifier.fillMaxWidth().clickable(enabled = enabled) { onChange(!checked) }.padding(horizontal = 16.dp, vertical = 12.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(12.dp),
   ) {
@@ -311,7 +456,7 @@ private fun DataRows() {
     }
   }
 
-  SettingsRow("Export", "Save as .xlsx", exportNote, statusTone = if (exportNote == "Failed") Tone.DANGER else Tone.MUTED) {
+  SettingsRow("Export", "Save as .xlsx, notification text included", exportNote, statusTone = if (exportNote == "Failed") Tone.DANGER else Tone.MUTED) {
     export.launch("balance-${java.time.LocalDate.now()}.xlsx")
   }
   SettingsRow("Import", "Add from .xlsx", importNote, statusTone = if (importNote == "Failed" || importNote == "Not a Balance sheet") Tone.DANGER else Tone.MUTED) {
@@ -340,6 +485,47 @@ private fun DataRows() {
   }
 }
 
+/** Dummy data for load testing. Local mode only: signed-in ledgers sync, and these must never reach the cloud. */
+@Composable
+private fun DevRows(state: AccountState) {
+  val core = LocalContext.current.balance.core
+  val scope = rememberCoroutineScope()
+  var note by remember { mutableStateOf<String?>(null) }
+  val count by produceState(0) {
+    value = core.dummyCount()
+    BalanceCore.changes.collect { value = core.dummyCount() }
+  }
+  val local = state is AccountState.Local
+
+  SettingsRow(
+    "Add 1,000 dummy entries",
+    if (local) "Spread over the last three years. Tap again to stack more." else "Switch to “Use this phone only” first",
+    status = note,
+    tone = if (local) Tone.TEXT else Tone.MUTED,
+    statusTone = if (note == "Failed") Tone.DANGER else Tone.MUTED,
+    onPress = if (local && note != "Working…") ({
+      note = "Working…"
+      scope.launch {
+        note = runCatching { core.seedDummy(1000) }.fold({ (n, ms) -> "%,d in %,d ms".format(n, ms) }, { "Failed" })
+      }
+    }) else null,
+  )
+  if (count > 0) {
+    SettingsRow("Remove dummy entries", "Real entries stay", status = "%,d".format(count), tone = Tone.DANGER) {
+      scope.launch { core.clearDummy(); note = null }
+    }
+  }
+}
+
+private const val WORKING = "Working…"
+
+/** The Activity behind a Compose context, unwrapping ContextWrappers (a themed or localised context isn't one). */
+tailrec fun Context.findActivity(): Activity? = when (this) {
+  is Activity -> this
+  is ContextWrapper -> baseContext.findActivity()
+  else -> null
+}
+
 @Composable
 private fun AccountRows(state: AccountState) {
   val context = LocalContext.current
@@ -361,13 +547,19 @@ private fun AccountRows(state: AccountState) {
         },
         tone = Tone.TEXT,
       ) { SyncWorker.request(context, 0) }
-      SettingsRow("Use this phone only", status = note, statusTone = Tone.DANGER) { asking = "local" }
+      SettingsRow("Use this phone only", status = note, statusTone = if (note == WORKING) Tone.MUTED else Tone.DANGER, onPress = if (note == WORKING) null else ({ asking = "local" }))
       SettingsRow("Sign out", tone = Tone.DANGER) { asking = "signOut" }
     }
     else -> {
-      SettingsRow("Connect Google", "Back up and sync", status = note, statusTone = Tone.DANGER) {
-        scope.launch { note = account.signInWithGoogle(context as Activity) }
-      }
+      // One sign-in at a time: a second tap while the Google sheet is coming up would start another.
+      val busy = note == WORKING
+      SettingsRow("Connect Google", "Back up and sync", status = note, statusTone = if (busy) Tone.MUTED else Tone.DANGER, onPress = if (busy) null else ({
+        val activity = context.findActivity()
+        if (activity == null) note = "Couldn’t reach Google." else {
+          note = WORKING
+          scope.launch { note = account.signInWithGoogle(activity) }
+        }
+      }))
     }
   }
 
@@ -380,7 +572,7 @@ private fun AccountRows(state: AccountState) {
       confirmButton = {
         TextButton(onClick = {
           asking = null
-          note = "Working…"
+          note = WORKING
           scope.launch { note = if (what == "local") account.switchToLocal() else { account.signOut(); null } }
         }) { Label(if (what == "local") "Switch" else "Sign out", weight = FontWeight.Bold, tone = Tone.DANGER) }
       },

@@ -92,6 +92,7 @@ class MainActivity : ComponentActivity() {
     val uri = intent?.data ?: return
     // Plain "balancenative://" (a widget tap) just opens the app where it was; only activity links navigate.
     if (uri.scheme != "balancenative" || uri.host != "activity") return
-    landing.value = Landing(uri.getQueryParameter("f"), uri.getQueryParameter("fix")?.toLongOrNull())
+    // Any app can send this link, so the id is only a hint: Activity ignores one that isn't waiting in To check.
+    landing.value = Landing(uri.getQueryParameter("f"), uri.getQueryParameter("fix")?.toLongOrNull()?.takeIf { it > 0 })
   }
 }
