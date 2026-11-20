@@ -240,16 +240,32 @@ internal object CloudSync {
   private fun since(cursor: String?): String? =
     cursor?.let { runCatching { instant(it).minusMillis(CURSOR_OVERLAP_MS).toString() }.getOrNull() }
 
+  /**
+   * One page of rows changed after [since], continuing after the (updated_at, id) of the last row of the
+   * previous page. Keyset, not offset: a row updated while we page moves to the end instead of shifting the
+   * rest, so no row is skipped.
+   */
+  internal fun pagePath(table: String, columns: String, since: String?, after: Pair<String, String>?): String {
+    val filters = buildString {
+      since?.let { append("&updated_at=gt.${Cloud.enc(it)}") }
+      after?.let { (at, id) ->
+        val a = Cloud.quote(at)
+        append("&or=" + Cloud.enc("(updated_at.gt.$a,and(updated_at.eq.$a,id.gt.${Cloud.quote(id)}))"))
+      }
+    }
+    return "$table?select=$columns,updated_at,deleted_at$filters&order=updated_at,id&limit=$PAGE"
+  }
+
   /** Rows changed after [since] (or all of them), deleted ones included. */
   private fun fetchChanged(context: Context, userId: String, table: String, columns: String, since: String?): List<JSONObject> {
     val out = mutableListOf<JSONObject>()
-    var offset = 0
+    var after: Pair<String, String>? = null
     while (true) {
-      val filter = since?.let { "&updated_at=gt.${Cloud.enc(it)}" }.orEmpty()
-      val page = Cloud.select(context, userId, "$table?select=$columns,updated_at,deleted_at$filter&order=updated_at,id&limit=$PAGE&offset=$offset")
+      val page = Cloud.select(context, userId, pagePath(table, columns, since, after))
       for (i in 0 until page.length()) out += page.getJSONObject(i)
       if (page.length() < PAGE) return out
-      offset += PAGE
+      val last = page.getJSONObject(page.length() - 1)
+      after = last.getString("updated_at") to last.getString("id")
     }
   }
 
@@ -314,7 +330,7 @@ internal object CloudSync {
     val gone = (base.keys + alsoGone).filter { it !in keep }
     for (batch in gone.chunked(CHUNK)) {
       // The server owns updated_at; deleted_at is ours to set.
-      val ids = batch.joinToString(",") { "\"$it\"" }
+      val ids = batch.joinToString(",") { Cloud.quote(it) }
       Cloud.update(context, userId, table, "id=in.${Cloud.enc("($ids)")}", JSONObject().put("deleted_at", Instant.now().toString()))
       record(context, userId, CloudChanges(base = batch.map { SyncBaseEntry(kind, it, null) }))
       batch.forEach { base.remove(it) }
@@ -337,6 +353,8 @@ internal object CloudSync {
     val from = since(state.cursor)
     val remoteCategories = fetchChanged(app, userId, "categories", CATEGORY_COLUMNS, from).map(::remoteCat)
     val remoteTransactions = fetchChanged(app, userId, "transactions", TRANSACTION_COLUMNS, from).map(::remoteTx)
+    // The fetches take a while: if the ledger switched meanwhile, [db] is the old owner's, and reading it would reopen a moved file.
+    if (Account.userId(app) != userId) throw IllegalStateException("Account changed")
     val pulled = planPull(state, remoteCategories, remoteTransactions, localCategories(db), localTransactions(db))
     record(app, userId, pulled.changes)
 

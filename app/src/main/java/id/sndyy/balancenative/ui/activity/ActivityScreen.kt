@@ -97,6 +97,8 @@ data class ActivityData(
   val categories: List<Category>,
   val unparsed: List<Unparsed>,
   val today: LocalDate,
+  /** What the AI put away as ads without asking (To check only). */
+  val hidden: List<Unparsed> = emptyList(),
 )
 
 private data class Key(val filter: String, val q: String, val count: Int)
@@ -119,6 +121,7 @@ class ActivityViewModel(app: Application) : AndroidViewModel(app) {
       categories = core.categories(),
       unparsed = core.unparsed(),
       today = LocalDate.now(),
+      hidden = if (reviewing) core.dismissed() else emptyList(),
     )
   }
 
@@ -136,6 +139,7 @@ class ActivityViewModel(app: Application) : AndroidViewModel(app) {
   }
 
   fun more() { count.value += PAGE }
+  fun restore(rawId: Long) { viewModelScope.launch { core.restoreDismissed(rawId) } }
   fun setFilter(f: String) { filter.value = f }
   fun label(source: String) = apps.value[source]?.label ?: core.sourceLabel(source)
   fun title(tx: Transaction) = core.title(tx)
@@ -204,6 +208,8 @@ fun ActivityScreen(landing: Pair<String?, Long?>?, onLandingUsed: () -> Unit, vm
     return
   }
   val data = s.data
+  // A link to an item that no longer waits (answered meanwhile, or an id from another app's link) opens To check as it is.
+  LaunchedEffect(fixId, data.unparsed) { if (fixId != null && data.unparsed.none { it.id == fixId }) fixId = null }
   val reviewing = filter == "review"
   val q = query.trim().lowercase()
   val toCheck = data.unparsed.size
@@ -265,15 +271,17 @@ fun ActivityScreen(landing: Pair<String?, Long?>?, onLandingUsed: () -> Unit, vm
         }
       }
       when {
-        reviewing && notes.isEmpty() -> Label(if (toCheck == 0) "Nothing to check." else "Nothing here.", Modifier.padding(start = Space.page, top = 24.dp), tone = Tone.MUTED)
+        reviewing && notes.isEmpty() && data.hidden.isEmpty() -> Label(if (toCheck == 0) "Nothing to check." else "Nothing here.", Modifier.padding(start = Space.page, top = 24.dp), tone = Tone.MUTED)
         reviewing -> LazyColumn(
           Modifier.fillMaxSize(),
           contentPadding = PaddingValues(start = Space.page, end = Space.page, top = 16.dp, bottom = Space.navClearance),
           verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+          if (notes.isEmpty()) item(key = "empty") { Label(if (toCheck == 0) "Nothing to check." else "Nothing here.", tone = Tone.MUTED) }
           items(notes, key = { it.id }) { n ->
             UnparsedCard(n, apps[n.source], vm.label(n.source), fixing = n.id == fixId, Modifier.animateItem())
           }
+          if (data.hidden.isNotEmpty()) item(key = "hidden") { HiddenByAi(data.hidden, vm::label, vm::restore) }
         }
         list.isEmpty() -> Label(if (filter == "all" && q.isEmpty()) "No transactions yet." else "Nothing here.", Modifier.padding(start = Space.page, top = 24.dp), tone = Tone.MUTED)
         else -> LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = Space.navClearance)) {
@@ -450,3 +458,24 @@ fun AppIcon(app: InstalledApp?, label: String, size: Int = 28) {
   }
 }
 
+
+/** What the AI put away as ads on its own, folded under To check. "Not an ad" brings one back as a question. */
+@Composable
+private fun HiddenByAi(hidden: List<Unparsed>, label: (String) -> String, onRestore: (Long) -> Unit) {
+  var open by remember { mutableStateOf(false) }
+  Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Label(
+      if (open) "Hide what the AI put away" else "Put away by AI as ads · ${hidden.size}",
+      Modifier.clickable { open = !open }.padding(vertical = 6.dp), size = 13.sp, tone = Tone.MUTED,
+    )
+    if (open) hidden.forEach { n ->
+      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+          Label("${label(n.source)} · ${Format.shortDate(Format.date(n.postedAt))}", size = 13.sp, tone = Tone.MUTED)
+          Label(n.body, size = 14.sp, maxLines = 2)
+        }
+        Label("Not an ad", Modifier.clickable { onRestore(n.id) }.padding(8.dp), size = 13.sp, weight = FontWeight.Medium, tone = Tone.ACCENT)
+      }
+    }
+  }
+}

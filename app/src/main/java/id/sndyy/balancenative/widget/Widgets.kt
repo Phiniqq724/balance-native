@@ -32,8 +32,13 @@ import id.sndyy.balancenative.core.BalanceEvents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 internal object W {
   val bg = Color(0xFF1A1614)
@@ -47,7 +52,7 @@ internal object W {
 
 /** Every Balance widget. Redrawn on each ledger write and at midnight, with the app open or not. */
 object Widgets {
-  private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+  internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val all: List<GlanceAppWidget> get() = listOf(SpendGridWidget(), MonthPulseWidget(), DailySpendWidget(), DayByDayWidget(), ToCheckWidget())
 
   fun refresh(context: Context) {
@@ -57,12 +62,27 @@ object Widgets {
   }
 }
 
+/**
+ * The ledger as every widget sees it after a write: read once per change and shared, however many widgets
+ * are placed (each used to read its own). No replay, so a widget starting up never gets an older read than its own.
+ */
+private var snapshots: SharedFlow<Snapshot>? = null
+
+@Synchronized
+private fun snapshots(context: Context): SharedFlow<Snapshot> = snapshots ?: BalanceEvents.changes
+  .conflate()
+  // A failed read (the ledger switching under it) skips this change; it must not end the shared stream or reach the scope.
+  .mapNotNull { runCatching { Snapshot.load(context.applicationContext) }.getOrNull() }
+  .flowOn(Dispatchers.IO)
+  .shareIn(Widgets.scope, SharingStarted.WhileSubscribed(5_000))
+  .also { snapshots = it }
+
 /** The ledger as the widget sees it: read once on start, then again on every ledger write. */
 @Composable
 internal fun rememberSnapshot(initial: Snapshot): Snapshot {
   val context = LocalContext.current
   val snapshot by produceState(initial) {
-    BalanceEvents.changes.collect { value = withContext(Dispatchers.IO) { Snapshot.load(context) } }
+    snapshots(context).collect { value = it }
   }
   return snapshot
 }

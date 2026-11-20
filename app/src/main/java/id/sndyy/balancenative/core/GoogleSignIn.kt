@@ -25,7 +25,7 @@ internal class GoogleSignInFailed(cause: Throwable?) : BalanceException("ERR_GOO
  * Credential Manager's account bottom sheet, no browser: accounts already used here first (one taps
  * in by itself), then every account on the phone. The full "Sign in with Google" dialog is only the
  * fallback for a phone with no Google account, since it can add one. Google gets the SHA-256 of a
- * fresh nonce; the raw nonce goes back to JS for Supabase, which checks it against the ID token.
+ * fresh nonce; the raw nonce goes to Supabase with the token ([Cloud.signInWithIdToken]), which checks the two match.
  */
 internal object GoogleSignIn {
   suspend fun signIn(activity: Activity, serverClientId: String): Map<String, String> {

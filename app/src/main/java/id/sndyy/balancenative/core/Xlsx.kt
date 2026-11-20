@@ -150,6 +150,8 @@ internal object Xlsx {
       if (ch in 'A'..'Z') n = n * 26 + (ch - 'A' + 1)
       else if (ch in 'a'..'z') n = n * 26 + (ch - 'a' + 1)
       else break
+      // More letters than XFD would overflow; anything past the last column is rejected by [sheetRows].
+      if (n > MAX_COLUMNS) return MAX_COLUMNS
     }
     return if (n == 0) null else n - 1
   }
@@ -173,8 +175,14 @@ internal object Xlsx {
 
   // ---- Reading ----
 
-  private const val MAX_PART_BYTES = 64L * 1024 * 1024
-  private const val MAX_TOTAL_BYTES = 128L * 1024 * 1024
+  // Held in memory while reading, so kept well inside a phone's heap. A ledger of 100,000 rows is a few MB.
+  private const val MAX_PART_BYTES = 32L * 1024 * 1024
+  private const val MAX_TOTAL_BYTES = 32L * 1024 * 1024
+  // Excel's own limits. Row and column numbers come from the file, so they are checked before any list grows to them.
+  private const val MAX_ROWS = 1_048_576
+  private const val MAX_COLUMNS = 16_384
+  // Cells a sheet may make room for, gaps included: one cell at XFD1048576 must not allocate the whole grid.
+  private const val MAX_SLOTS = 4_000_000
 
   fun read(input: InputStream): Workbook {
     val parts = unzip(input)
@@ -286,8 +294,13 @@ internal object Xlsx {
     }
   }
 
-  private fun sheetRows(xml: ByteArray, shared: List<String>): List<List<Any?>> {
-    val rows = ArrayList<MutableList<Any?>>()
+  internal fun sheetRows(xml: ByteArray, shared: List<String>): List<List<Any?>> {
+    val rows = ArrayList<List<Any?>>()
+    var slots = 0L
+    fun room(n: Int) {
+      slots += n
+      if (slots > MAX_SLOTS) throw FormatException("File too large")
+    }
     val parser = newParser(xml)
     var row: MutableList<Any?>? = null
     var col = 0
@@ -298,6 +311,8 @@ internal object Xlsx {
     var inInlineText = false
 
     fun place(target: MutableList<Any?>, index: Int, v: Any?) {
+      if (index >= MAX_COLUMNS) throw FormatException("Column out of range")
+      if (target.size <= index) room(index + 1 - target.size)
       while (target.size <= index) target += null
       target[index] = v
     }
@@ -308,7 +323,10 @@ internal object Xlsx {
         XmlPullParser.START_TAG -> when (parser.localName()) {
           "row" -> {
             val index = parser.attr("r")?.toIntOrNull()?.minus(1) ?: rows.size
-            while (rows.size < index) rows.add(mutableListOf())
+            if (index !in 0 until MAX_ROWS) throw FormatException("Row out of range")
+            // Gaps are filled with one shared empty row, so they cost a reference each, not a list.
+            if (rows.size < index) room(index - rows.size)
+            while (rows.size < index) rows.add(emptyList())
             row = mutableListOf()
             col = 0
           }

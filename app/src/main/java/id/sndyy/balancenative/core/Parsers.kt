@@ -22,8 +22,8 @@ internal sealed interface ParseResult {
 }
 
 /**
- * Bank rules come from JS (src/lib/parse-rules.ts) so they ship by OTA update. They are kept in
- * prefs, not a ledger, so the listener reads them with the app closed and for every account.
+ * Bank rules ship with the app (assets/parse_rules.json, from the Expo app's src/lib/parse-rules.ts). They
+ * are kept in prefs, not a ledger, so the listener reads them with the app closed and for every account.
  */
 internal class RuleSet(
   val strip: List<Regex>,
@@ -42,6 +42,8 @@ internal object Parsers {
   private const val KEY_RULES = "rules"
 
   private val anyAmount = Regex(AMOUNT, RegexOption.IGNORE_CASE)
+  private val zeroWidth = Regex("[\\u200B-\\u200D\\u2060\\uFEFF]")
+  private val spaces = Regex("""\s+""")
   private val empty = RuleSet(emptyList(), emptyList(), null, null, null)
 
   @Volatile private var cached: Pair<String, RuleSet>? = null
@@ -56,6 +58,8 @@ internal object Parsers {
 
   /** Stores new rules. Throws, keeping the old ones, if any pattern doesn't compile. */
   fun setRules(context: Context, json: String) {
+    // The same rules as stored (every resume hands them over again): nothing to compile or write.
+    if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_RULES, null) == json) return
     val set = compile(json)
     context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_RULES, json).commit()
     cached = json to set
@@ -116,8 +120,8 @@ internal object Parsers {
   /** Strips zero-width characters (Jago puts them inside names), footers like the help line and extra spaces. */
   fun normalize(body: String, strip: List<Regex> = emptyList()): String =
     strip
-      .fold(body.replace(Regex("[\\u200B-\\u200D\\u2060\\uFEFF]"), "")) { text, footer -> footer.replace(text, "") }
-      .replace(Regex("""\s+"""), " ")
+      .fold(body.replace(zeroWidth, "")) { text, footer -> footer.replace(text, "") }
+      .replace(spaces, " ")
       .trim()
       .trimEnd('.')
 

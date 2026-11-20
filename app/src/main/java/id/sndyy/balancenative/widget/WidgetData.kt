@@ -11,7 +11,6 @@ import id.sndyy.balancenative.core.ReviewNotifier
 import id.sndyy.balancenative.core.WidgetBridge
 import id.sndyy.balancenative.core.WidgetCharts
 import java.time.DayOfWeek
-import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.TextStyle
@@ -42,13 +41,17 @@ internal data class Snapshot(
       val db = BalanceDb.get(context)
       val spent = HashMap<LocalDate, Long>()
       val received = HashMap<LocalDate, Long>()
+      // Summed per local day by SQLite (as BalanceCore.dailyTotals does): one row per day, not per payment.
       db.readableDatabase.rawQuery(
-        "SELECT occurred_at, amount, direction FROM transactions WHERE is_transfer = 0 AND occurred_at >= ?",
+        """SELECT date(occurred_at / 1000, 'unixepoch', 'localtime') AS day,
+                  SUM(CASE WHEN direction = 'in' THEN 0 ELSE amount END), SUM(CASE WHEN direction = 'in' THEN amount ELSE 0 END)
+           FROM transactions WHERE is_transfer = 0 AND occurred_at >= ? GROUP BY day""",
         arrayOf(from.atStartOfDay(zone).toInstant().toEpochMilli().toString()),
       ).use { c ->
         while (c.moveToNext()) {
-          val day = Instant.ofEpochMilli(c.getLong(0)).atZone(zone).toLocalDate()
-          (if (c.getString(2) == "in") received else spent).merge(day, c.getLong(1), Long::plus)
+          val day = LocalDate.parse(c.getString(0))
+          if (c.getLong(1) != 0L) spent[day] = c.getLong(1)
+          if (c.getLong(2) != 0L) received[day] = c.getLong(2)
         }
       }
       val items = db.readableDatabase.rawQuery(

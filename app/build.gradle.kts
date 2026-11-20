@@ -96,6 +96,8 @@ dependencies {
     testImplementation(libs.junit)
     // Android's org.json is a stub on the JVM; the parser tests need the real one.
     testImplementation(libs.org.json)
+    // Real SQLite and android.util.Xml for the ledger-merge, AI-review and xlsx tests.
+    testImplementation(libs.robolectric)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.espresso.core)

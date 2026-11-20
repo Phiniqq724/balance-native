@@ -20,7 +20,7 @@ internal object Ledger {
   // An "ad or other" verdict this sure is put away without asking.
   private const val AD_DISMISS_CONFIDENCE = 0.8
   private const val MAX_AI_ATTEMPTS = 3
-  private const val MAX_EXAMPLES = 100
+  internal const val MAX_EXAMPLES = 100
 
   private val writer = Executors.newSingleThreadExecutor { Thread(it, "balance-ledger") }
 
@@ -32,7 +32,7 @@ internal object Ledger {
     }
   }
 
-  /** Runs [block] on the writer thread and waits, so JS mutations never race the listener. */
+  /** Runs [block] on the writer thread and waits, so UI and worker writes never race the listener. */
   fun <T> write(context: Context, block: (BalanceDb) -> T): T = write(context, notify = true, block)
 
   /** [notify] false: bookkeeping only (sync state), so screens, widgets and the sync itself aren't woken. */
@@ -160,7 +160,11 @@ internal object Ledger {
     val sqlite = db.writableDatabase
     val current = review(sqlite, rawId) ?: return
     if (current.state != "pending" && current.state != "failed") return // The user got there first.
-    val dismiss = kind == "ad_or_other" && confidence >= AD_DISMISS_CONFIDENCE
+    val pkg = sqlite.rawQuery("SELECT package FROM raw_notifications WHERE id = ?", arrayOf(rawId.toString()))
+      .use { if (it.moveToFirst()) it.getString(0) else null }
+    // Only the bank apps with built-in rules are put away unasked. Text from apps the user picked (a chat, say)
+    // is anyone's to write, and could talk the model into calling a real payment an ad.
+    val dismiss = kind == "ad_or_other" && confidence >= AD_DISMISS_CONFIDENCE && pkg in Settings.DEFAULT_PACKAGES
     sqlite.execSQL(
       """
       UPDATE ai_reviews SET state = ?, kind = ?, direction = ?, amount = ?, counterparty = ?, confidence = ?, updated_at = ?
@@ -169,6 +173,19 @@ internal object Ledger {
       arrayOf<Any?>(if (dismiss) "dismissed" else "suggested", kind, direction, amount, counterparty, confidence, System.currentTimeMillis(), rawId)
     )
     if (dismiss) setStatus(sqlite, rawId, "ignored")
+  }
+
+  /** Brings a notification the AI put away as an ad back to To check, as the suggestion it was. */
+  fun restoreDismissed(db: BalanceDb, rawId: Long) {
+    val sqlite = db.writableDatabase
+    sqlite.beginTransaction()
+    try {
+      sqlite.execSQL("UPDATE ai_reviews SET state = 'suggested', updated_at = ? WHERE raw_id = ? AND state = 'dismissed'", arrayOf<Any>(System.currentTimeMillis(), rawId))
+      sqlite.execSQL("UPDATE raw_notifications SET status = 'unparsed' WHERE id = ? AND status = 'ignored'", arrayOf<Any>(rawId))
+      sqlite.setTransactionSuccessful()
+    } finally {
+      sqlite.endTransaction()
+    }
   }
 
   /** The function answered but had nothing for this one. After a few tries it waits for the user. */
@@ -260,9 +277,18 @@ internal object Ledger {
 
   internal class CategoryRule(val id: String, val keywords: List<Regex>)
 
-  // Keywords match whole words, so "fee" hits "Admin Fee" but not "coffee".
-  internal fun loadRules(db: BalanceDb): List<CategoryRule> =
-    db.readableDatabase.rawQuery("SELECT id, keywords FROM categories ORDER BY position", null).use { c ->
+  /**
+   * Keywords match whole words, so "fee" hits "Admin Fee" but not "coffee". Compiled once per set of
+   * categories and kept on the ledger: a re-read calls this for every notification, and compiling every
+   * keyword each time was most of its cost. The categories' own text says whether the set changed.
+   */
+  internal fun loadRules(db: BalanceDb): List<CategoryRule> {
+    val sqlite = db.readableDatabase
+    val signature = sqlite.rawQuery(
+      "SELECT group_concat(id || char(31) || keywords, char(30)) FROM (SELECT id, keywords FROM categories ORDER BY position)", null
+    ).use { if (it.moveToFirst()) it.getString(0).orEmpty() else "" }
+    db.categoryRules?.let { (cached, rules) -> if (cached == signature) return rules }
+    val rules = sqlite.rawQuery("SELECT id, keywords FROM categories ORDER BY position", null).use { c ->
       buildList {
         while (c.moveToNext()) {
           val keywords = Settings.splitList(c.getString(1)).map { keyword ->
@@ -272,6 +298,9 @@ internal object Ledger {
         }
       }
     }
+    db.categoryRules = signature to rules
+    return rules
+  }
 
   internal fun categorize(rules: List<CategoryRule>, counterparty: String?, bankCategory: String?): String? {
     val haystack = listOfNotNull(counterparty, bankCategory).joinToString(" ").lowercase()
@@ -357,7 +386,7 @@ internal object Ledger {
     }
   }
 
-  /** Stores new bank rules from JS and re-reads this ledger once per rule change. Resolves true if it re-read. */
+  /** Stores the bundled bank rules and re-reads this ledger once per rule change. Returns true if it re-read. */
   fun applyRules(db: BalanceDb, json: String): Boolean {
     Parsers.setRules(db.appContext, json)
     val version = json.hashCode().toString(16) + ":" + json.length
@@ -466,6 +495,11 @@ internal object Ledger {
 
 /** Ledger writes from anywhere in the process (UI, listener service, AI worker), as a stream the screens collect. */
 object BalanceEvents {
+  private val counter = java.util.concurrent.atomic.AtomicLong()
+
+  /** Goes up on every ledger write, so a cache can tell whether it is still current. */
+  val version: Long get() = counter.get()
+
   private val _changes = kotlinx.coroutines.flow.MutableSharedFlow<Unit>(
     extraBufferCapacity = 1,
     onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
@@ -473,6 +507,7 @@ object BalanceEvents {
   val changes: kotlinx.coroutines.flow.SharedFlow<Unit> = _changes
 
   fun emitLedgerChanged() {
+    counter.incrementAndGet()
     _changes.tryEmit(Unit)
   }
 }

@@ -40,7 +40,7 @@ data class CloudRekey(
   val to: String = "",
 )
 
-/** One sync step's changes for this ledger, worked out in JS (src/lib/sync.ts). */
+/** One sync step's changes for this ledger, worked out by [CloudSync.planPull] (a port of the Expo app's src/lib/sync.ts). */
 data class CloudChanges(
   /** The sync state belongs to another user (or none yet): forget it before applying. */
   val reset: Boolean = false,
@@ -215,6 +215,16 @@ internal object LedgerMerge {
           SELECT uid, package, title, body, posted_at, status FROM src.raw_notifications WHERE uid IS NOT NULL
           """
         )
+        // Restored rows have no body, so a different one from the same app in the same millisecond collided
+        // above and was skipped. Those go in one by one, nudged apart like any restored row.
+        val skipped = sqlite.rawQuery(
+          """
+          SELECT uid, package, posted_at FROM src.raw_notifications
+          WHERE status = ? AND uid IS NOT NULL AND uid NOT IN (SELECT uid FROM main.raw_notifications WHERE uid IS NOT NULL)
+          """,
+          arrayOf(RESTORED)
+        ).use { c -> buildList { while (c.moveToNext()) add(Triple(c.getString(0), c.getString(1), c.getLong(2))) } }
+        for ((uid, pkg, at) in skipped) insertRestoredRaw(sqlite, uid, pkg, at)
         sqlite.execSQL(
           """
           INSERT INTO main.transactions (raw_id, source, direction, amount, counterparty, bank_category, category_id,
@@ -238,6 +248,7 @@ internal object LedgerMerge {
           null
         ).use { c -> buildList { while (c.moveToNext()) add(c.getString(0) to c.getString(1)) } }
         linkPairs(sqlite, pairs)
+        mergeAnswers(sqlite)
 
         mergeSettings(db, sqlite)
         sqlite.setTransactionSuccessful()
@@ -247,6 +258,42 @@ internal object LedgerMerge {
     } finally {
       sqlite.execSQL("DETACH DATABASE src")
     }
+  }
+
+  /**
+   * The user's answers to AI suggestions, so a later re-read keeps them. Where both files have a row, an
+   * answer (confirmed, rejected, dismissed) wins over a question still open. Examples already in the target
+   * aren't added again, so merging twice changes nothing.
+   */
+  private fun mergeAnswers(sqlite: SQLiteDatabase) {
+    val columns = "raw_id, state, kind, direction, amount, counterparty, confidence, attempts, updated_at"
+    val select = """
+      SELECT mr.id, a.state, a.kind, a.direction, a.amount, a.counterparty, a.confidence, a.attempts, a.updated_at
+      FROM src.ai_reviews a
+      JOIN src.raw_notifications sr ON sr.id = a.raw_id
+      JOIN main.raw_notifications mr ON mr.uid = sr.uid
+    """
+    sqlite.execSQL(
+      """
+      INSERT OR REPLACE INTO main.ai_reviews ($columns)
+      $select
+      WHERE a.state IN ('confirmed', 'rejected', 'dismissed')
+        AND NOT EXISTS (SELECT 1 FROM main.ai_reviews m WHERE m.raw_id = mr.id AND m.state IN ('confirmed', 'rejected', 'dismissed'))
+      """
+    )
+    sqlite.execSQL("INSERT OR IGNORE INTO main.ai_reviews ($columns) $select")
+    sqlite.execSQL(
+      """
+      INSERT INTO main.ai_examples (text, kind, direction, amount, counterparty)
+      SELECT s.text, s.kind, s.direction, s.amount, s.counterparty FROM src.ai_examples s
+      WHERE NOT EXISTS (
+        SELECT 1 FROM main.ai_examples m
+        WHERE m.text = s.text AND m.kind = s.kind AND m.direction = s.direction AND m.amount = s.amount AND m.counterparty IS s.counterparty
+      )
+      ORDER BY s.id
+      """
+    )
+    sqlite.execSQL("DELETE FROM main.ai_examples WHERE id NOT IN (SELECT id FROM main.ai_examples ORDER BY id DESC LIMIT ${Ledger.MAX_EXAMPLES})")
   }
 
   private fun mergeSettings(db: BalanceDb, sqlite: SQLiteDatabase) {

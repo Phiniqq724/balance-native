@@ -54,6 +54,8 @@ class ProfileStore(context: Context, private val core: BalanceCore) {
 
   companion object {
     val USERNAME = Regex("^[a-z0-9_.]{3,20}$")
+    // "<user id or local>/<time>.jpg", the only shape either app writes. Anything else from the server is ignored.
+    private val AVATAR_PATH = Regex("^([0-9a-f-]{36}|local)/\\d{10,14}\\.jpg$")
     private const val CACHE_KEY = "profile"
     private const val SEED_KEY = "mosaic_seed"
     private const val BUCKET = "avatars"
@@ -132,7 +134,7 @@ class ProfileStore(context: Context, private val core: BalanceCore) {
       val row = runCatching { Cloud.select(app, owner, "profiles?select=username,avatar_path&id=eq.$owner").optJSONObject(0) }
       if (row.isSuccess) {
         val o = row.getOrNull()
-        val path = o?.optString("avatar_path")?.takeIf { !o.isNull("avatar_path") && it.isNotEmpty() }
+        val path = o?.optString("avatar_path")?.takeIf { !o.isNull("avatar_path") && AVATAR_PATH.matches(it) }
         val username = o?.optString("username")?.takeIf { !o.isNull("username") && it.isNotEmpty() }
         if (path != null && !fileFor(path).exists()) {
           runCatching { Cloud.signedUrl(app, owner, BUCKET, path, 60)?.let { fileFor(path).writeBytes(CloudHttp.download(it)) } }

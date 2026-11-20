@@ -74,4 +74,27 @@ class CloudSyncTest {
     val pulled = CloudSync.planPull(s, emptyList(), listOf(CloudSync.Remote(tx("a"), "2026-11-18T04:00:00Z", true)), emptyList(), listOf(tx("a", category = "food")))
     assertTrue(pulled.changes.deletedTransactions.isEmpty())
   }
+
+  @Test fun firstPageHasNoKeysetFilter() {
+    val path = CloudSync.pagePath("transactions", "id", "2026-11-18T04:10:52.719Z", null)
+    assertEquals("transactions?select=id,updated_at,deleted_at&updated_at=gt.2026-11-18T04%3A10%3A52.719Z&order=updated_at,id&limit=1000", path)
+  }
+
+  @Test fun nextPageContinuesAfterTheLastRow() {
+    val path = CloudSync.pagePath("transactions", "id", null, "2026-11-18T04:12:52.719123+00:00" to "abc")
+    val or = java.net.URLDecoder.decode(path.substringAfter("&or=").substringBefore("&order"), "UTF-8")
+    assertEquals(
+      "(updated_at.gt.\"2026-11-18T04:12:52.719123+00:00\",and(updated_at.eq.\"2026-11-18T04:12:52.719123+00:00\",id.gt.\"abc\"))",
+      or,
+    )
+    assertTrue(path.endsWith("&order=updated_at,id&limit=1000"))
+    assertTrue("no offset paging any more", "offset" !in path)
+  }
+
+  @Test fun quotedValuesKeepCommasQuotesAndBackslashes() {
+    assertEquals("\"plain\"", Cloud.quote("plain"))
+    assertEquals("\"a,b)\"", Cloud.quote("a,b)"))
+    assertEquals("\"say \\\"hi\\\"\"", Cloud.quote("say \"hi\""))
+    assertEquals("\"back\\\\slash\"", Cloud.quote("back\\slash"))
+  }
 }

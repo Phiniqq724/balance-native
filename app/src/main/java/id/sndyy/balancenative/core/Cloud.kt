@@ -72,6 +72,12 @@ internal object Cloud {
 
   fun enc(value: String): String = URLEncoder.encode(value, "UTF-8")
 
+  /**
+   * A value inside a PostgREST list or logic tree (`in.(…)`, `or=(…)`): double-quoted with backslash and
+   * quote escaped, so commas, dots, colons and parentheses in it stay part of the value.
+   */
+  fun quote(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
   /** GET /rest/v1/[path] (a table plus PostgREST query string) as a JSON array. */
   fun select(context: Context, userId: String, path: String): JSONArray {
     val res = CloudHttp.request("GET", "${url(context)}/rest/v1/$path", CloudAuth.headers(context, session(context, userId)))

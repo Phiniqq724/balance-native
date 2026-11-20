@@ -59,7 +59,6 @@ import id.sndyy.balancenative.balance
 import id.sndyy.balancenative.core.FlowChart
 import id.sndyy.balancenative.core.FlowChartProps
 import id.sndyy.balancenative.data.Book
-import id.sndyy.balancenative.data.Direction
 import id.sndyy.balancenative.data.Format
 import id.sndyy.balancenative.data.RangeStats
 import id.sndyy.balancenative.data.Selection
@@ -122,7 +121,7 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
     // are only read for the range on screen (see stats), so the cost stays flat as the ledger grows.
     val days = core.dailyTotals()
     val book = withContext(Dispatchers.Default) { Book(Book.firstDay(today, days.firstOrNull()?.day), today, days) }
-    val waiting = runCatching { core.unparsed() }.getOrDefault(emptyList())
+    val (toCheck, toCheckAmount) = runCatching { core.toCheckSummary() }.getOrDefault(0 to 0L)
     val initial = stats(book, focus?.let { book.week(it) } ?: inView(book, settled))
     withContext(Dispatchers.Default) {
       OverviewData(
@@ -130,8 +129,8 @@ class OverviewViewModel(app: Application) : AndroidViewModel(app) {
         stats = initial,
         empty = days.isEmpty(),
         hasAccess = core.hasNotificationAccess(),
-        toCheck = waiting.size,
-        toCheckAmount = waiting.sumOf { w -> w.review?.takeIf { it.direction == Direction.OUT }?.amount ?: 0L },
+        toCheck = toCheck,
+        toCheckAmount = toCheckAmount,
       )
     }
   }

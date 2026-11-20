@@ -100,6 +100,7 @@ data class ProfileData(
   val hasAccess: Boolean,
   val aiReview: Boolean,
   val alerts: Boolean,
+  val lockScreenDetails: Boolean,
   val aiKey: BalanceCore.AiKeyInfo?,
   val entries: Int,
 )
@@ -115,6 +116,7 @@ class ProfileViewModel(app: Application) : AndroidViewModel(app) {
       hasAccess = core.hasNotificationAccess(),
       aiReview = core.aiReviewEnabled(),
       alerts = core.setting("review_alerts") != "0",
+      lockScreenDetails = core.setting("lock_screen_details") == "1",
       aiKey = core.aiKeyInfo(),
       entries = runCatching { core.activityPage(ActivityQuery(), 1).total }.getOrDefault(0),
     )
@@ -167,6 +169,9 @@ fun ProfileScreen(vm: ProfileViewModel = viewModel()) {
         scope.launch { core.setAiReview(on) }
       }
       ToggleRow("Alerts", "Ask me about unclear ones", data.alerts) { on -> scope.launch { core.setSetting("review_alerts", if (on) "1" else "0") } }
+      ToggleRow("Details on lock screen", "Show the bank's text before unlocking", data.lockScreenDetails, enabled = data.alerts) { on ->
+        scope.launch { core.setSetting("lock_screen_details", if (on) "1" else "0") }
+      }
       SettingsRow("AI key", data.aiKey?.let { "${it.provider} ····${it.last4}" } ?: "Use your own Gemini, OpenAI or Claude key") { keySheet = true }
     }
 
@@ -405,7 +410,7 @@ private fun DataRows() {
     }
   }
 
-  SettingsRow("Export", "Save as .xlsx", exportNote, statusTone = if (exportNote == "Failed") Tone.DANGER else Tone.MUTED) {
+  SettingsRow("Export", "Save as .xlsx, notification text included", exportNote, statusTone = if (exportNote == "Failed") Tone.DANGER else Tone.MUTED) {
     export.launch("balance-${java.time.LocalDate.now()}.xlsx")
   }
   SettingsRow("Import", "Add from .xlsx", importNote, statusTone = if (importNote == "Failed" || importNote == "Not a Balance sheet") Tone.DANGER else Tone.MUTED) {

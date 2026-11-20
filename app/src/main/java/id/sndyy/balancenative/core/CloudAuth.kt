@@ -15,11 +15,18 @@ internal object CloudHttp {
     .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
     .build()
 
-  /** GET [url] as bytes (photos). Throws [IOException] on a network failure or a non-2xx status. */
-  fun download(url: String): ByteArray {
+  /**
+   * GET [url] as bytes (photos). Throws [IOException] on a network failure, a non-2xx status, or a body
+   * over [maxBytes]: the URL comes from account data, so its size isn't ours to trust.
+   */
+  fun download(url: String, maxBytes: Long = 2L * 1024 * 1024): ByteArray {
     client.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { res ->
       if (!res.isSuccessful) throw IOException("download ${res.code}")
-      return res.body.bytes()
+      if (res.body.contentLength() > maxBytes) throw IOException("download too large")
+      val source = res.body.source()
+      // True when more than maxBytes are there to read: refuse before buffering the rest.
+      if (source.request(maxBytes + 1)) throw IOException("download too large")
+      return source.buffer.readByteArray()
     }
   }
 
@@ -59,8 +66,8 @@ internal object CloudAuth {
 
   /**
    * A usable session for [owner], refreshed when it expires within a minute. Null when nobody
-   * is signed in or the refresh token was revoked (JS finds that out on its own). The stored
-   * JSON keeps the shape supabase-js writes, so the JS client reads it unchanged.
+   * is signed in or the refresh token was revoked; callers treat that as signed out. The stored
+   * JSON keeps the shape supabase-js writes (sealed by [Account]), the format the Expo app's session uses too.
    */
   @Synchronized
   fun session(context: Context, owner: String, timeoutMs: Int = 30_000): Session? {
@@ -77,7 +84,7 @@ internal object CloudAuth {
       val refresh = stored.optString("refresh_token")
       if (access.isEmpty() || refresh.isEmpty()) return null
       if (stored.optLong("expires_at") - System.currentTimeMillis() / 1000 > REFRESH_MARGIN_S) return Session(access, userId)
-      // The JS client may have rotated the token since we last looked; then its newer session is the one to use.
+      // A sign-in may have stored a newer session since we last looked; then that one is the one to use.
       if (refresh == tried) return null
       tried = refresh
 

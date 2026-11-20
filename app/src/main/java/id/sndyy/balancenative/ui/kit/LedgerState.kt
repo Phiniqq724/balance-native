@@ -8,7 +8,9 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.onStart
@@ -32,8 +34,12 @@ object UiEvents {
   fun retry() { _retry.tryEmit(Unit) }
 }
 
-/** Fires once now, then on every ledger write, resume or retry. */
-fun ledgerTicks(): Flow<Unit> = merge(BalanceCore.changes, UiEvents.resumed, UiEvents.retry).onStart { emit(Unit) }.conflate()
+/**
+ * Fires once now, then on every ledger write, resume or retry. Bursts (a sync applying rows in chunks)
+ * settle for 150 ms first, so they cost one re-read, not one per write. The first read never waits.
+ */
+@OptIn(FlowPreview::class)
+fun ledgerTicks(): Flow<Unit> = merge(BalanceCore.changes, UiEvents.resumed, UiEvents.retry).debounce(150).onStart { emit(Unit) }.conflate()
 
 /**
  * Runs a ledger read and re-runs it whenever the listener writes something new or the app comes

@@ -151,13 +151,22 @@ class BalanceCore(context: Context) {
         ors += "instr(CAST(t.amount AS TEXT), ?) > 0"; args += number
       }
       // The search also matches the app name ("jago", "gopay").
-      val sources = read("SELECT DISTINCT source FROM transactions") { it.getString(0) }.filter { sourceLabel(it).lowercase().contains(q) }
+      val sources = ledgerSources().filter { sourceLabel(it).lowercase().contains(q) }
       if (sources.isNotEmpty()) {
         ors += "t.source IN (${sources.joinToString(",") { "?" }})"; args.addAll(sources)
       }
       where += "(${ors.joinToString(" OR ")})"
     }
     return (if (where.isEmpty()) "" else " WHERE ${where.joinToString(" AND ")}") to args
+  }
+
+  // Apps the ledger has entries from, for matching a search against app names. Re-read only after a ledger write.
+  @Volatile private var sources: Pair<Long, List<String>>? = null
+
+  private suspend fun ledgerSources(): List<String> {
+    val version = BalanceEvents.version
+    sources?.let { (seen, list) -> if (seen == version) return list }
+    return read("SELECT DISTINCT source FROM transactions") { it.getString(0) }.also { sources = version to it }
   }
 
   /**
@@ -249,6 +258,25 @@ class BalanceCore(context: Context) {
     )
   }
 
+  /** What the AI put away as ads without asking, newest first, so one it got wrong can be brought back. */
+  suspend fun dismissed(): List<Unparsed> = read(
+    """SELECT r.id, r.package, r.title, r.body, r.posted_at
+       FROM raw_notifications r JOIN ai_reviews a ON a.raw_id = r.id
+       WHERE a.state = 'dismissed' AND r.status = 'ignored' ORDER BY r.posted_at DESC LIMIT 50""",
+  ) {
+    Unparsed(id = it.long("id")!!, source = it.str("package")!!, title = it.str("title"), body = it.str("body").orEmpty(), postedAt = it.long("posted_at") ?: 0, review = null)
+  }
+
+  suspend fun restoreDismissed(rawId: Long) = write { d -> Ledger.restoreDismissed(d, rawId) }
+
+  /** How many wait in To check, and what the AI read as spending among them: summed by SQLite, no rows read. */
+  suspend fun toCheckSummary(): Pair<Int, Long> = read(
+    """SELECT COUNT(*),
+              COALESCE(SUM(CASE WHEN a.state IN ('pending', 'suggested', 'failed') AND a.direction = 'out' THEN a.amount END), 0)
+       FROM raw_notifications r LEFT JOIN ai_reviews a ON a.raw_id = r.id
+       WHERE r.status = 'unparsed'""",
+  ) { it.getInt(0) to it.getLong(1) }.first()
+
   suspend fun unparsedCount(): Int = read("SELECT COUNT(*) FROM raw_notifications WHERE status = 'unparsed'") { it.getInt(0) }.first()
 
   suspend fun setting(key: String): String? = withContext(Dispatchers.IO) { db.getSetting(key) }
@@ -304,9 +332,14 @@ class BalanceCore(context: Context) {
 
   suspend fun setWatchedPackages(packages: List<String>) = setSetting(Settings.WATCHED_PACKAGES, packages.distinct().joinToString(","))
 
+  // The bundled rules never change while the process lives: read from the APK once, not on every resume.
+  @Volatile private var bundledRules: String? = null
+
   /** Hands the bundled bank rules to the parser. Re-reads the ledger only when they changed. */
   suspend fun applyBundledRules() {
-    val json = withContext(Dispatchers.IO) { app.assets.open("parse_rules.json").bufferedReader().use { it.readText() } }
+    val json = bundledRules ?: withContext(Dispatchers.IO) {
+      app.assets.open("parse_rules.json").bufferedReader().use { it.readText() }
+    }.also { bundledRules = it }
     write(notify = false) { d -> Ledger.applyRules(d, json) }.also { changed -> if (changed) Ledger.onChanged(app) }
   }
 
